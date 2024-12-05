@@ -1,0 +1,14 @@
+{
+    "default": [
+        "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+        "C:\\Users\\Nathan\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Discord Inc\\Discord.lnk"
+    ],
+    "gaming": [
+        "C:\\Program Files (x86)\\Steam\\Steam.exe",
+        "C:\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live"
+    ],
+    "programming": [
+        "C:\\Users\\Nathan\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    ]
+}
