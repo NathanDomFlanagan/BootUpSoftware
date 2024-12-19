@@ -10,7 +10,7 @@ def start_app(command):
         print(f"Could not find the application: {command}")
         
 def load_config(config_path):
-    if os.path.exists(config_path):
+    if not os.path.exists(config_path):        
         print(f"Configuration file not found: {config_path}")
         return {}
     with open(config_path, "r") as file:
@@ -24,7 +24,8 @@ def main():
     if args.startup:
         print("Running application at startup...")
 
-    config_path = 'config.json'
+    # config_path = 'C:/Users/Nathan/Documents/GitHub/BootUpSoftware/src/config.json'
+    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     categories = load_config(config_path)
 
     if not categories:
