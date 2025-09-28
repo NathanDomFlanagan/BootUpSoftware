@@ -1,0 +1,78 @@
+# .github/workflows/python-ci.yml
+name: CI & Release Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # 1) Build & Test on every push or PR to main
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -e .
+
+      - name: Run unit tests
+        run: |
+          pip install pytest
+          pytest --maxfail=1 --disable-warnings -q
+
+  # 2) Format & Lint on every push or PR to main
+  lint-format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install formatting & linting tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install black isort autopep8 flake8
+
+      - name: Run Black (code formatter)
+        run: black .
+
+      - name: Run isort (import sorter)
+        run: isort .
+
+      - name: Run autopep8 (additional formatting)
+        run: autopep8 --in-place --recursive src/
+
+      - name: Run flake8 (code linter)
+        run: flake8 src/
+
+      - name: Commit formatting changes
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git diff --exit-code || (
+            git add .
+            git commit -m "style: apply auto-formatting"
+            git push
+          )
