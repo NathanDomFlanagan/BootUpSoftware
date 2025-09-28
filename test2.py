@@ -1,9 +1,8 @@
 import json
 import os
-import subprocess
 import tkinter as tk
-from tkinter import filedialog, messagebox
-from tkinter import simpledialog
+import tkinter.font as tkfont
+from tkinter import filedialog, messagebox, simpledialog
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
@@ -24,9 +23,11 @@ class ConfigManager(tk.Tk):
         self.title("App Launcher Config Manager")
         self.geometry("580x390")
         self.cfg = load_config()
+        self.tooltip = None
         self.create_widgets()
         self.refresh_categories()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        
 
     def create_widgets(self):
         # Category label + dropdown
@@ -39,6 +40,10 @@ class ConfigManager(tk.Tk):
         tk.Label(self, text="Applications in this Category:").pack(pady=(10, 0))
         self.listbox = tk.Listbox(self, height=8)
         self.listbox.pack(fill="both", expand=True, padx=20)
+        # initialize tooltip for this listbox
+        self.tooltip = ToolTip(self.listbox)
+        self.listbox.bind("<Motion>",      self.on_listbox_motion) # type: ignore
+        self.listbox.bind("<Leave>",       lambda e: self.tooltip.hidetip()) # type: ignore
 
         # Button panel
         btn_frame = tk.Frame(self)
@@ -66,9 +71,22 @@ class ConfigManager(tk.Tk):
 
     def refresh_apps(self):
         self.listbox.delete(0, tk.END)
+        self.apps_map = []  # index → full path
+        
         apps = self.cfg.get(self.cat_var.get(), [])
         for path in apps:
-            self.listbox.insert(tk.END, path)
+            name = os.path.basename(path)
+            self.listbox.insert(tk.END, name)
+            self.apps_map.append(path)
+    
+    def on_listbox_motion(self, event):
+        # Show a tooltip containing the full path when hovering an item.
+        idx = self.listbox.nearest(event.y)
+        if idx < 0 or idx >= len(self.apps_map):
+            self.tooltip.hidetip() # type: ignore
+            return
+        full_path = self.apps_map[idx]
+        self.tooltip.showtip(full_path) # type: ignore
     
     def new_category(self):
         name = simpledialog.askstring("New Category", "Enter the new category name:")
@@ -111,7 +129,6 @@ class ConfigManager(tk.Tk):
             f"Category '{cat}' has been removed."
         )
 
-
     def add_app(self):
         path = filedialog.askopenfilename(
             title="Select Application or Shortcut",
@@ -153,7 +170,7 @@ class ConfigManager(tk.Tk):
             messagebox.showinfo("Info", "No applications to run in this category.")
             return
 
-        for path in apps:
+        for path in self.apps_map:
             try:
                 # Use os.startfile so .lnk and .exe both open correctly
                 os.startfile(path)
@@ -164,6 +181,38 @@ class ConfigManager(tk.Tk):
         # Final save and exit
         save_config(self.cfg)
         self.destroy()
+        
+class ToolTip:
+    def __init__(self, widget):
+        self.widget = widget
+        self.tipwindow = None
+        self.font = tkfont.Font(family="Tahoma", size=8, weight="normal")
+
+    def showtip(self, text):
+        if self.tipwindow or not text:
+            return
+        x, y, _, _ = self.widget.bbox("active")  # coords of the hovered item
+        x += self.widget.winfo_rootx() + 20
+        y += self.widget.winfo_rooty() + 10
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            tw,
+            text=text,
+            justify="left",
+            background="#ffffe0",
+            relief="solid",
+            borderwidth=1,
+            font=self.font
+        )
+        label.pack(ipadx=1)
+
+    def hidetip(self):
+        tw = self.tipwindow
+        if tw:
+            tw.destroy()
+        self.tipwindow = None
 
 if __name__ == "__main__":
     ConfigManager().mainloop()
