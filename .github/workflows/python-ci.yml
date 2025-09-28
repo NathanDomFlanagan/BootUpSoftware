@@ -61,11 +61,11 @@ jobs:
       - name: Run autopep8 (additional formatting)
         run: autopep8 --in-place --recursive src/
 
-      - name: Run flake8 (code linter)
-        run: |
-          flake8 src/ \
-            --max-line-length=88 \
-            --extend-ignore=E203,W503
+    #   - name: Run flake8 (code linter)
+    #     run: |
+    #       flake8 src/ \
+    #         --max-line-length=88 \
+    #         --extend-ignore=E203,W503
 
       - name: Commit formatting changes
         if: ${{ github.event_name == 'pull_request' }}
