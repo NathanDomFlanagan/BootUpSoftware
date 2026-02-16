@@ -21,7 +21,7 @@ class ConfigManager(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("App Launcher Config Manager")
-        self.geometry("580x390")
+        self.geometry("650x450")
         self.cfg = load_config()
         self.tooltip = None
         self.create_widgets()
@@ -49,9 +49,9 @@ class ConfigManager(tk.Tk):
         btn_frame = tk.Frame(self)
         btn_frame.pack(pady=10)
 
-        tk.Button(btn_frame, text="Add App",       command=self.add_app).grid(row=0, column=0, padx=5)
-        tk.Button(btn_frame, text="Remove App",    command=self.remove_selected).grid(row=0, column=1, padx=5)
-        tk.Button(btn_frame, text="Run Apps",      command=self.run_apps).grid(row=0, column=2, padx=5)
+        tk.Button(btn_frame, text="Run Apps",      command=self.run_apps).grid(row=0, column=0, padx=5)
+        tk.Button(btn_frame, text="Add App",       command=self.add_app).grid(row=0, column=1, padx=5)
+        tk.Button(btn_frame, text="Remove App",    command=self.remove_selected).grid(row=0, column=2, padx=5)
         tk.Button(btn_frame, text="New Category", command=self.new_category).grid(row=0, column=3, padx=5)
         tk.Button(btn_frame, text="Remove Category", command=self.remove_category).grid(row=0, column=4, padx=5)
         tk.Button(btn_frame, text="Save & Exit",   command=self.on_close).grid(row=0, column=5, padx=5)
