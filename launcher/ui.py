@@ -27,15 +27,6 @@ class LauncherUI(tb.Window):
         self.trash = []  # list of (original_category, path)
 
     def create_widgets(self):
-        # menubar = tb.Menu(self)
-        # self.config(menu=menubar)
-
-        # tools_menu = tb.Menu(menubar, tearoff=0)
-        # tools_menu.add_command(label="View Trash", command=self.view_trash)
-
-        # menubar.add_cascade(label="Tools", menu=tools_menu)
-        
-
         # Top frame: category selector
         top_frame = tb.Frame(self)
         top_frame.pack(fill=X, padx=10, pady=10)
