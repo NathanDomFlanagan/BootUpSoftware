@@ -1,18 +1,4 @@
 {
-    "categories": {
-        "Default": [
-            "C:\\Users\\Nathan\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Discord Inc\\Discord.lnk",
-            "C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe"
-        ],
-        "Gaming": [
-            "G:/SteamLibrary/steamapps/common/Cyberpunk 2077/REDprelauncher.exe",
-            "C:/Program Files (x86)/Steam/steam.exe",
-            "C:/Users/Nathan/Desktop/Blitz.lnk"
-        ],
-        "Programming": [
-            "C:\\Users\\Nathan\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
-            "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
-        ]
-    },
+    "categories": {},
     "profiles": {}
 }

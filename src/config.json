@@ -12,8 +12,14 @@
         "C:\\Users\\Nathan\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
         "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
     ],
-    "profiles": { 
-        "school": ["default", "programming"], 
-        "gaming_session": ["gaming", "default"] 
+    "profiles": {
+        "school": [
+            "default",
+            "programming"
+        ],
+        "gaming_session": [
+            "gaming",
+            "default"
+        ]
     }
 }
