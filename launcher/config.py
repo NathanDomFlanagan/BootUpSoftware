@@ -4,7 +4,6 @@ from pathlib import Path
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
-
 class Config:
     def __init__(self):
         self.path = CONFIG_PATH

@@ -85,8 +85,6 @@ class LauncherUI(tb.Window):
         tb.Button(bottom_frame, text="Trash",command=self.view_trash, bootstyle=SECONDARY).grid(row=0, column=4, padx=5)
         tb.Button(bottom_frame,text="Trash", command=self.view_trash, bootstyle=SECONDARY).grid(row=0, column=4, padx=5)
 
-
-
         # Status bar
         self.status_var = tb.StringVar(value="Ready")
         status_frame = tb.Frame(self)
