@@ -1,4 +1,9 @@
 {
-    "categories": {},
-    "profiles": {}
+    "categories": {
+    },
+    "profiles": {
+    },
+    "settings": {
+        "hotkey": "ctrl+alt+l"
+    }
 }
