@@ -85,3 +85,4 @@ Use **Edit** on an existing profile any time to change which categories it inclu
 
 - The Trash/Undo history is **in-memory only** — it resets when you close the app. Removed apps are gone from `config.json` immediately (that part is permanent across restarts), but the *undo/trash UI* for viewing what was removed only lasts for the current session.
 - Category names are **case-sensitive** — `"Gaming"` and `"gaming"` can exist as two separate categories.
+- Have to know the location of an application you **want** to add to a category.
