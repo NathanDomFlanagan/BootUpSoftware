@@ -4,19 +4,27 @@ A lightweight Windows desktop app for launching groups of programs with a single
 
 Instead of manually opening five apps every time you sit down to game, code, or study, you organize them into **categories** (e.g. "Gaming", "Programming") and optionally combine categories into **profiles** (e.g. a "School" profile that launches your Programming *and* Default apps together).
 
+## Download
+
+Grab the latest pre-built Windows release from the [Releases page](https://github.com/NathanDomFlanagan/BootUpSoftware/releases) — download the `.zip`, extract it, and run `AppLauncher.exe` (keep it next to its `_internal/` folder). No Python installation required.
+
+To run from source instead, see [Requirements](#requirements) and [Running it](#running-it) below.
+
 ## Features
 
 - **Categories** — group apps/shortcuts under a named category, and launch all of them at once
 - **Profiles** — combine multiple categories into a single one-click launch (e.g. "Gaming Session" = Gaming + Default), with duplicate apps automatically de-duplicated
-- **Add/remove apps** — pick from a searchable, refreshable Start Menu + Desktop scan, or browse for any `.exe`/`.lnk` file manually
+- **Add apps from three sources** — a searchable, refreshable scan of Start Menu + Desktop shortcuts, installed UWP/Microsoft Store apps, or browse for any `.exe`/`.lnk` file manually
+- **Edit App** — change an app's display name, launch arguments, and working directory after adding it (e.g. turning a browser shortcut into a specific web-app launch with `--app=...`)
 - **Rename / delete categories and profiles**
 - **Undo** — restore the last app you removed from a category
 - **Trash view** — see everything you've removed this session and restore any of them
 - **Hover tooltips** — hover over an app in the list to see its full file path
 - **System tray** — closing the window minimizes to the tray instead of quitting; the tray icon adapts to your Windows light/dark taskbar theme
 - **Global hotkey** — bring the window back from anywhere with a configurable shortcut (default `ctrl+alt+l`)
-- **Settings window** — a tabbed panel (menu bar → **Settings...**) for the global shortcut, Run at Startup, Start Minimized, and config export/import
+- **Settings window** — a tabbed panel (menu bar → **Settings...**) for the global shortcut, Run at Startup, Start Minimized, Startup Profile, and config export/import
 - **Run at Startup** — launches automatically at login via a registry entry (`HKCU\...\CurrentVersion\Run`), with automatic detection and one-click repair if the entry goes stale (e.g. after moving the project folder)
+- **Startup Profile** — automatically launch a chosen profile's apps when the app starts at login (not on a manual open), so your usual set of apps is running by the time you sit down
 - **Export / Import config** — back up or share your categories and profiles as a standalone JSON file
 - **Dark theme UI** via ttkbootstrap
 
@@ -47,19 +55,23 @@ On first run, if no `config.json` exists next to the script, one is created auto
 | File | Purpose |
 |---|---|
 | `main.py` | Entry point — parses `--startup`, sets up logging, creates the UI window and starts the Tkinter event loop |
-| `ui.py` | Main window UI logic: category/profile selectors, the app list (Treeview), buttons, dialogs, tray/hotkey lifecycle |
-| `settings_window.py` | Tabbed Settings window — global shortcut, Run at Startup, Start Minimized, config export/import |
+| `ui.py` | Main window UI logic: category/profile selectors, the app list (Treeview), buttons, tray/hotkey lifecycle |
+| `app_picker.py` | The "Add App" window — searchable list combining Start Menu/Desktop shortcuts and UWP/Store apps, scanned on a background thread |
+| `edit_app_dialog.py` | The "Edit App" window — change an app's name, path, arguments, and working directory |
+| `edit_profile_dialog.py` | The "Edit Profile" window — scrollable category checklist for a profile |
+| `trash_window.py` | The Trash window — view and restore apps removed this session |
+| `settings_window.py` | Tabbed Settings window — global shortcut, Run at Startup, Start Minimized, Startup Profile, config export/import |
 | `config.py` | `Config` class — loads/saves `config.json`, and all category/profile CRUD operations |
-| `launcher.py` | `AppLauncher` class — actually launches apps via `os.startfile()`, with error handling |
+| `launcher.py` | `AppLauncher` class — launches apps via `os.startfile()` (or `subprocess` when arguments/working directory are set), with error handling |
 | `tray.py` | `TrayIcon` — system tray icon and menu (pystray), theme-adaptive |
 | `hotkey.py` | `HotkeyManager` — registers the global show-window shortcut (`keyboard`) |
 | `startup.py` | `StartupManager` — Run at Startup via the `HKCU\...\Run` registry key |
-| `appscan.py` | Scans the Start Menu + Desktop for installed apps to populate the Add App picker (requires `pywin32`) |
+| `appscan.py` | Scans the Start Menu + Desktop for installed apps (requires `pywin32`) and UWP/Store apps (via PowerShell's `Get-StartApps`, no extra dependency) |
 | `paths.py` | Shared helper for resolving paths whether running from source or frozen as a PyInstaller exe |
 | `applog.py` | Centralized rotating-file logging setup, including uncaught-exception handlers |
 | `tooltip.py` | Small reusable `ToolTip` widget used for showing full file paths on hover |
 | `config.json` | Your saved categories, apps, and profiles — created automatically, safe to back up |
-| `tests/` | Pytest suite covering `config.py`, `appscan.py`, `startup.py`, and the undo/trash/import fixes in `ui.py` |
+| `tests/` | Pytest suite covering `config.py`, `appscan.py`, `startup.py`, `launcher.py`, and the undo/trash/import fixes in `ui.py` |
 
 ## How the data is stored
 
@@ -68,28 +80,42 @@ On first run, if no `config.json` exists next to the script, one is created auto
 ```json
 {
     "categories": {
-        "Default": ["C:/path/to/discord.lnk", "C:/path/to/brave.exe"],
-        "Gaming": ["C:/path/to/steam.exe"],
-        "Programming": ["C:/path/to/vscode.exe"]
+        "Default": [
+            {"path": "C:/path/to/discord.lnk", "name": "Discord", "args": "", "working_dir": ""},
+            {"path": "C:/path/to/brave.exe", "name": "Brave", "args": "", "working_dir": ""}
+        ],
+        "Gaming": [
+            {"path": "C:/path/to/steam.exe", "name": "Steam", "args": "", "working_dir": ""}
+        ],
+        "Programming": [
+            {"path": "shell:AppsFolder\\Microsoft.VisualStudioCode_xxx!App", "name": "VS Code", "args": "", "working_dir": ""}
+        ]
     },
     "profiles": {
         "School": ["Default", "Programming"],
         "Gaming Session": ["Gaming", "Default"]
+    },
+    "settings": {
+        "hotkey": "ctrl+alt+l",
+        "start_minimized": true,
+        "autostart_profile": ""
     }
 }
 ```
 
-- **`categories`** — each key is a category name, each value is a list of file paths (apps or shortcuts) in that category.
+- **`categories`** — each key is a category name, each value is a list of app entries in that category. Each entry has a `path` (a normal file path for a `.exe`/`.lnk`, or a `shell:AppsFolder\...` pseudo-path identifying a UWP/Store app), a display `name`, and optional `args`/`working_dir` (set via **Edit App**).
 - **`profiles`** — each key is a profile name, each value is a list of *category names* to launch together. Running a profile flattens every app across those categories into one de-duplicated launch list.
+- **`settings`** — machine-specific preferences: the global hotkey, whether startup launches go straight to the tray, and which profile (if any) auto-launches at login.
 
-If you have an older `config.json` from a previous version (a flat format without the `categories` wrapper), it's automatically detected and migrated to the current format the first time you run the app — no manual conversion needed.
+If you have an older `config.json` from a previous version (either the original flat format with no `categories` wrapper, or one where each app was just a bare path string instead of the object shown above), it's automatically detected and migrated to the current format the first time you run the app — no manual conversion needed.
 
 ## Using categories and profiles
 
 **Categories:**
 1. Click **New** next to the Category dropdown, name it
-2. Select it, click **Add App**, pick an `.exe` or `.lnk`
+2. Select it, click **Add App** — pick from the searchable list (Start Menu/Desktop shortcuts and installed UWP/Store apps) or use **Browse Manually...** for anything not listed
 3. Click **Run All** to launch everything in that category, or select one app and click **Run Selected**
+4. Select an app and click **Edit App** (or double-click it) to rename it, or set launch arguments/a working directory — useful for e.g. turning a browser shortcut into a specific web-app launch
 
 **Profiles:**
 1. Click **New** next to the Profile dropdown, name it — this opens the category picker automatically
@@ -102,7 +128,7 @@ Use **Edit** on an existing profile any time to change which categories it inclu
 
 Open **Settings...** from the menu bar for:
 
-- **General tab** — change the global shortcut that brings the window back from the tray; toggle **Run at Startup** (adds/removes a `HKCU\...\CurrentVersion\Run` registry entry, no admin rights needed); toggle **Start Minimized** for whether startup launches should skip straight to the tray. If the startup entry goes stale — e.g. you moved or re-cloned the project folder — a **Repair Startup Entry** button appears automatically.
+- **General tab** — change the global shortcut that brings the window back from the tray; toggle **Run at Startup** (adds/removes a `HKCU\...\CurrentVersion\Run` registry entry, no admin rights needed); toggle **Start Minimized** for whether startup launches should skip straight to the tray; pick a **Startup Profile** to auto-launch its apps when the app starts at login (not on a manual open). If the startup entry goes stale — e.g. you moved or re-cloned the project folder — a **Repair Startup Entry** button appears automatically.
 - **Backup tab** — export your categories/profiles to a JSON file, or import one (with merge/replace/skip choices per category on conflict).
 
 ## Notes / known limitations

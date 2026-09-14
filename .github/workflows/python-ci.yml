@@ -3,9 +3,35 @@ name: Deploy to Windows Server
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
 
 jobs:
+  test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        working-directory: launcher
+        run: python -m pytest tests/ -v
+
   build-exe:
+    needs: test
     runs-on: windows-latest
 
     steps:
@@ -30,8 +56,24 @@ jobs:
             --add-data "config.json;." `
             main.py
 
-      - name: Upload EXE artifact
+      - name: Zip build output
+        run: Compress-Archive -Path launcher/dist/AppLauncher/* -DestinationPath AppLauncher-windows.zip
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: BootUpLauncher
           path: launcher/dist/AppLauncher/
+
+      # Only runs when the push was a version tag (e.g. v1.0.0), not on
+      # every push to main — turns that tag into an actual GitHub Release
+      # with the built app attached, so users can grab it from the
+      # Releases page instead of digging through Actions run artifacts.
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AppLauncher-windows.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

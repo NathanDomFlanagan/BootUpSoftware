@@ -30,24 +30,27 @@ except ImportError:
     log.warning("winreg not available — Run at Startup feature is unavailable")
 
 
-def _expected_command(start_minimized: bool) -> str:
+def _expected_command() -> str:
     """The command line the registry value SHOULD hold right now — differs
     depending on whether running from source (via pythonw.exe) or frozen as
-    a standalone exe (PyInstaller)."""
-    startup_flag = " --startup" if start_minimized else ""
-
+    a standalone exe (PyInstaller). Always passes --startup, which signals
+    "Windows launched this at login" — that's a fact about how the process
+    started, not a preference, so it doesn't vary. Whether to actually
+    minimize to tray or auto-launch a profile are separate preferences the
+    app reads live from config.json once it's running (see ui.py), rather
+    than being baked into the registry command itself."""
     if is_frozen():
-        return f'"{sys.executable}"{startup_flag}'
+        return f'"{sys.executable}" --startup'
 
     python_dir = Path(sys.executable).parent
     pythonw = python_dir / "pythonw.exe"
     if not pythonw.exists():
         pythonw = Path(sys.executable)  # fall back to python.exe if pythonw.exe is missing
     main_py = app_dir(__file__) / "main.py"
-    return f'"{pythonw}" "{main_py}"{startup_flag}'
+    return f'"{pythonw}" "{main_py}" --startup'
 
 
-def _files_exist(start_minimized: bool) -> bool:
+def _files_exist() -> bool:
     """Do the files the current command line would point at actually exist
     on disk right now? This is the check that catches a moved/renamed
     project folder or a reinstalled Python — comparing a stored command
@@ -80,7 +83,7 @@ class StartupManager:
         except OSError:
             return False
 
-    def is_up_to_date(self, start_minimized: bool) -> bool:
+    def is_up_to_date(self) -> bool:
         """True if no entry is registered (nothing to repair), or the
         registered command both (a) points at files that actually exist on
         disk right now, and (b) matches what we'd currently create. False
@@ -95,12 +98,12 @@ class StartupManager:
         except OSError:
             return True  # nothing registered — nothing to repair
 
-        if not _files_exist(start_minimized):
+        if not _files_exist():
             return False
 
-        return value == _expected_command(start_minimized)
+        return value == _expected_command()
 
-    def enable(self, start_minimized: bool) -> bool:
+    def enable(self) -> bool:
         """Writes the registry value, overwriting it if one already exists
         (used both for first-time enable and for repairing/updating)."""
         if not WINREG_AVAILABLE:
@@ -111,10 +114,10 @@ class StartupManager:
                 winreg.HKEY_CURRENT_USER, REGISTRY_RUN_KEY, 0, winreg.KEY_SET_VALUE
             )
             winreg.SetValueEx(
-                key, REGISTRY_VALUE_NAME, 0, winreg.REG_SZ, _expected_command(start_minimized)
+                key, REGISTRY_VALUE_NAME, 0, winreg.REG_SZ, _expected_command()
             )
             winreg.CloseKey(key)
-            log.info("Startup registry entry created/updated (start_minimized=%s)", start_minimized)
+            log.info("Startup registry entry created/updated")
             return True
         except OSError:
             log.exception("Failed to create startup registry entry")

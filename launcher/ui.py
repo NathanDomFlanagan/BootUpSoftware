@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 
 class LauncherUI(tb.Window):
-    def __init__(self, start_minimized: bool = False):
+    def __init__(self, launched_at_startup: bool = False):
         super().__init__(title="App Launcher", themename="darkly")
         self.geometry("800x560")
 
@@ -54,15 +54,26 @@ class LauncherUI(tb.Window):
         # Closing the window (X button) minimizes to tray instead of quitting.
         self.protocol("WM_DELETE_WINDOW", self.minimize_to_tray)
 
-        if start_minimized:
-            # Let the window fully initialize first, then hide it straight to
-            # the tray rather than briefly flashing on screen at login.
+        if launched_at_startup:
+            self._apply_startup_behavior()
+
+    def _apply_startup_behavior(self):
+        """Called once from __init__, only when launched_at_startup is True
+        (i.e. this run was triggered by the Windows Run at Startup entry,
+        not a manual open — otherwise reopening the window during the day
+        would relaunch everything every time).
+
+        Start Minimized is a separate, independently-read preference here
+        rather than something baked into how the process was launched — a
+        user can want the Startup Profile to run without also wanting the
+        window minimized. (Regression: this used to be gated on the same
+        flag as minimizing, so a user with Start Minimized off never got
+        their Startup Profile launched at all.)"""
+        if self.config_manager.get_start_minimized():
+            # Let the window fully initialize first, then hide it straight
+            # to the tray rather than briefly flashing on screen at login.
             self.after(10, self.minimize_to_tray)
-            # Only auto-launch apps when actually starting at Windows login
-            # (the --startup flag), not on a manual open of the launcher —
-            # otherwise reopening the window during the day would relaunch
-            # everything every time.
-            self.after(20, self._maybe_run_autostart_profile)
+        self.after(20, self._maybe_run_autostart_profile)
 
     def _style_menu(self, menu: Menu):
         """Native tk.Menu widgets aren't ttk, so they don't auto-follow the
