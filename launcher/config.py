@@ -1,7 +1,11 @@
 import json
+import logging
 import shutil
-import sys
 from pathlib import Path
+
+from paths import app_dir, bundled_dir, is_frozen
+
+log = logging.getLogger(__name__)
 
 CONFIG_NAME = "config.json"
 
@@ -10,15 +14,32 @@ def _is_default_category(name: str) -> bool:
     return name.strip().lower() == "default"
 
 
+def normalize_app_entry(entry) -> dict:
+    """Coerces an app entry into the current {"path", "name", "args",
+    "working_dir"} shape. Accepts either that dict shape (from a current
+    config or export) or a bare path string (from an older config/export,
+    predating per-app names/arguments) — the plain-string case derives its
+    display name from the path's filename, same as the old behavior."""
+    if isinstance(entry, str):
+        return {"path": entry, "name": Path(entry).name, "args": "", "working_dir": ""}
+    path = entry.get("path", "")
+    return {
+        "path": path,
+        "name": entry.get("name") or Path(path).name,
+        "args": entry.get("args", ""),
+        "working_dir": entry.get("working_dir", ""),
+    }
+
+
 def _resolve_config_path() -> Path:
-    if getattr(sys, "frozen", False):
-        external = Path(sys.executable).parent / CONFIG_NAME
+    if is_frozen():
+        external = app_dir(__file__) / CONFIG_NAME
         if not external.exists():
-            bundled = Path(sys._MEIPASS) / CONFIG_NAME
+            bundled = bundled_dir() / CONFIG_NAME
             if bundled.exists():
                 shutil.copy(bundled, external)
         return external
-    return Path(__file__).with_name(CONFIG_NAME)
+    return app_dir(__file__) / CONFIG_NAME
 
 
 CONFIG_PATH = _resolve_config_path()
@@ -45,8 +66,27 @@ class Config:
             self.save()
             return
 
-        with self.path.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
+        try:
+            with self.path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            # Corrupt or unreadable config.json would otherwise crash the app
+            # on every startup with no way to recover without manual file
+            # surgery. Back up the bad file and fall back to defaults instead
+            # — a background app should degrade gracefully, not refuse to start.
+            log.exception("Failed to read %s — falling back to a fresh default config", self.path)
+            try:
+                backup_path = self.path.with_suffix(".json.bak")
+                shutil.copy(self.path, backup_path)
+                log.info("Backed up unreadable config to %s", backup_path)
+            except OSError:
+                log.exception("Could not back up unreadable config file")
+            self.data = {
+                "categories": {"default": []},
+                "profiles": {}
+            }
+            self.save()
+            return
 
         # Backward compatibility: old format was { "default": [...], "gaming": [...], "profiles": {...} }
         if "categories" not in raw:
@@ -56,14 +96,33 @@ class Config:
                 if k != "profiles" and isinstance(v, list)
             }
             self.data["profiles"] = profiles
-            self.save()
+            needs_save = True
         else:
             self.data = raw
             self.data.setdefault("profiles", {})
+            needs_save = False
+
+        # Backward compatibility: app entries used to be plain path strings
+        # rather than {"path", "name", "args", "working_dir"} dicts (added
+        # to support UWP/Store apps and per-app launch arguments). Normalize
+        # in place so the rest of the app never has to handle both shapes.
+        for cat, apps in self.categories.items():
+            if any(isinstance(e, str) for e in apps):
+                self.categories[cat] = [normalize_app_entry(e) for e in apps]
+                needs_save = True
+
+        if needs_save:
+            self.save()
 
     def save(self):
-        with self.path.open("w", encoding="utf-8") as f:
-            json.dump(self.data, f, indent=4)
+        try:
+            with self.path.open("w", encoding="utf-8") as f:
+                json.dump(self.data, f, indent=4)
+        except OSError:
+            # Disk full, permissions issue, file locked by another process, etc.
+            # Log it rather than crash — the in-memory state is still valid
+            # for the rest of this session even if it couldn't be persisted.
+            log.exception("Failed to save %s", self.path)
 
     @property
     def categories(self):
@@ -88,13 +147,33 @@ class Config:
         self.save()
         return True
 
+    def get_start_minimized(self) -> bool:
+        return self.settings.get("start_minimized", True)
+
+    def set_start_minimized(self, value: bool):
+        self.settings["start_minimized"] = bool(value)
+        self.save()
+
+    def get_autostart_profile(self) -> str:
+        """Name of the profile to launch automatically when the app starts
+        via --startup (i.e. at Windows login) — empty string means none."""
+        return self.settings.get("autostart_profile", "")
+
+    def set_autostart_profile(self, name: str):
+        self.settings["autostart_profile"] = name.strip() if name else ""
+        self.save()
+
     # Category management
 
     def add_category(self, name: str):
         name = name.strip()
         if not name:
             return False
-        if name in self.categories:
+        # Case-insensitive duplicate check — "Gaming" and "gaming" shouldn't
+        # be able to coexist as separate categories — while still storing
+        # the name with whatever casing the user actually typed, since a
+        # nicely capitalized display name is nicer than forcing lowercase.
+        if name.lower() in {c.lower() for c in self.categories}:
             return False
         self.categories[name] = []
         self.save()
@@ -116,7 +195,12 @@ class Config:
         new = new.strip()
         if not new or old not in self.categories:
             return False
-        if new in self.categories and new != old:
+        # Same case-insensitive duplicate check as add_category — but allow
+        # renaming a category to a different casing of its own current name
+        # (e.g. "gaming" -> "Gaming"), which is a legitimate rename, not a
+        # collision with itself.
+        clashes = new.lower() in {c.lower() for c in self.categories if c != old}
+        if clashes:
             return False
         self.categories[new] = self.categories.pop(old)
         # Update profiles that reference this category
@@ -125,12 +209,19 @@ class Config:
         self.save()
         return True
 
-    def add_app_to_category(self, category: str, path: str):
+    def add_app_to_category(self, category: str, path: str, name: str = None,
+                             args: str = "", working_dir: str = ""):
         if category not in self.categories:
             return False
-        if path in self.categories[category]:
+        if any(e["path"] == path for e in self.categories[category]):
             return False
-        self.categories[category].append(path)
+        entry = {
+            "path": path,
+            "name": name or Path(path).name,
+            "args": args,
+            "working_dir": working_dir,
+        }
+        self.categories[category].append(entry)
         self.save()
         return True
 
@@ -143,6 +234,28 @@ class Config:
             return None
         self.save()
         return removed
+
+    def update_app(self, category: str, index: int, path: str, name: str = None,
+                    args: str = "", working_dir: str = ""):
+        """Overwrites the app entry at `index` with new field values — used
+        by the Edit App dialog to change name/path/arguments/working
+        directory for an existing entry. Returns False if the index is out
+        of range, or another entry in the category already uses that path."""
+        if category not in self.categories:
+            return False
+        apps = self.categories[category]
+        if index < 0 or index >= len(apps):
+            return False
+        if any(i != index and e["path"] == path for i, e in enumerate(apps)):
+            return False
+        apps[index] = {
+            "path": path,
+            "name": name or Path(path).name,
+            "args": args,
+            "working_dir": working_dir,
+        }
+        self.save()
+        return True
 
     # Profile management
 
@@ -161,6 +274,10 @@ class Config:
         if name not in self.profiles:
             return False
         del self.profiles[name]
+        # Don't leave the autostart setting pointing at a profile that no
+        # longer exists.
+        if self.get_autostart_profile() == name:
+            self.settings["autostart_profile"] = ""
         self.save()
         return True
 
@@ -171,6 +288,9 @@ class Config:
         if new in self.profiles and new != old:
             return False
         self.profiles[new] = self.profiles.pop(old)
+        # Keep the autostart setting following the profile it refers to.
+        if self.get_autostart_profile() == old:
+            self.settings["autostart_profile"] = new
         self.save()
         return True
 
@@ -183,13 +303,71 @@ class Config:
         return True
 
     def get_profile_apps(self, name: str):
-        """Flattened, de-duplicated list of app paths across all categories in a profile."""
+        """Flattened, de-duplicated (by path) list of app entries across all
+        categories in a profile."""
         cats = self.profiles.get(name, [])
         seen = set()
         apps = []
         for c in cats:
-            for path in self.categories.get(c, []):
-                if path not in seen:
-                    seen.add(path)
-                    apps.append(path)
+            for entry in self.categories.get(c, []):
+                if entry["path"] not in seen:
+                    seen.add(entry["path"])
+                    apps.append(entry)
         return apps
+
+    # Export / import
+
+    def export_to(self, path) -> bool:
+        """Writes categories + profiles (not settings — those are machine-specific,
+        like the hotkey) to a standalone JSON file for backup or sharing."""
+        payload = {"categories": self.categories, "profiles": self.profiles}
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=4)
+            log.info("Exported config to %s", path)
+            return True
+        except OSError:
+            log.exception("Failed to export config to %s", path)
+            return False
+
+    def read_import_file(self, path):
+        """Reads and validates an export file without applying it yet.
+        Returns the parsed dict, or None if the file is missing, corrupt,
+        or doesn't look like a valid export."""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            log.exception("Failed to read import file %s", path)
+            return None
+        if not isinstance(raw.get("categories"), dict):
+            log.warning("Import file %s missing a valid 'categories' key", path)
+            return None
+        return raw
+
+    def import_category(self, name: str, apps: list, mode: str):
+        """mode: 'add' (name doesn't exist locally yet), 'replace' (overwrite
+        the existing category's app list), or 'combine' (merge app lists,
+        skipping duplicate paths). `apps` entries may be plain path strings
+        (an older export) or the current dict shape — normalized either way."""
+        normalized = [normalize_app_entry(e) for e in apps]
+        if mode in ("add", "replace"):
+            self.categories[name] = normalized
+        elif mode == "combine":
+            existing = self.categories.setdefault(name, [])
+            existing_paths = {e["path"] for e in existing}
+            for entry in normalized:
+                if entry["path"] not in existing_paths:
+                    existing.append(entry)
+                    existing_paths.add(entry["path"])
+        self.save()
+
+    def import_profiles(self, profiles: dict):
+        """Adds profiles from an import file that don't already exist locally.
+        Existing profiles with the same name are left untouched."""
+        for name, cats in profiles.items():
+            if name in self.profiles or not isinstance(cats, list):
+                continue
+            valid = [c for c in cats if c in self.categories]
+            self.profiles[name] = valid
+        self.save()

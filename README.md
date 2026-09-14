@@ -8,22 +8,29 @@ Instead of manually opening five apps every time you sit down to game, code, or 
 
 - **Categories** — group apps/shortcuts under a named category, and launch all of them at once
 - **Profiles** — combine multiple categories into a single one-click launch (e.g. "Gaming Session" = Gaming + Default), with duplicate apps automatically de-duplicated
-- **Add/remove apps** — pick any `.exe` or `.lnk` file via a native file picker
+- **Add/remove apps** — pick from a searchable, refreshable Start Menu + Desktop scan, or browse for any `.exe`/`.lnk` file manually
 - **Rename / delete categories and profiles**
 - **Undo** — restore the last app you removed from a category
 - **Trash view** — see everything you've removed this session and restore any of them
 - **Hover tooltips** — hover over an app in the list to see its full file path
+- **System tray** — closing the window minimizes to the tray instead of quitting; the tray icon adapts to your Windows light/dark taskbar theme
+- **Global hotkey** — bring the window back from anywhere with a configurable shortcut (default `ctrl+alt+l`)
+- **Settings window** — a tabbed panel (menu bar → **Settings...**) for the global shortcut, Run at Startup, Start Minimized, and config export/import
+- **Run at Startup** — launches automatically at login via a registry entry (`HKCU\...\CurrentVersion\Run`), with automatic detection and one-click repair if the entry goes stale (e.g. after moving the project folder)
+- **Export / Import config** — back up or share your categories and profiles as a standalone JSON file
 - **Dark theme UI** via ttkbootstrap
 
 ## Requirements
 
 - Python 3.9+
-- Windows (uses `os.startfile()` to launch `.exe`/`.lnk` files; falls back to `subprocess.Popen` on other platforms, though the file picker and shortcut handling are Windows-oriented)
-- [`ttkbootstrap`](https://pypi.org/project/ttkbootstrap/)
+- Windows (uses `os.startfile()` to launch `.exe`/`.lnk` files; falls back to `subprocess.Popen` on other platforms, though the tray icon, global hotkey, Start Menu/Desktop scan, and Run at Startup are Windows-only features)
+- See [`requirements.txt`](requirements.txt):
 
 ```bash
-pip install ttkbootstrap
+pip install -r requirements.txt
 ```
+
+`pywin32` is optional but recommended — without it, the app picker falls back to manual file browsing, and Run at Startup is unaffected (it only needs the standard-library `winreg` module).
 
 ## Running it
 
@@ -31,18 +38,28 @@ pip install ttkbootstrap
 python main.py
 ```
 
+Pass `--startup` to launch minimized straight to the tray (this is what the Run at Startup registry entry uses automatically — you shouldn't need to pass it by hand).
+
 On first run, if no `config.json` exists next to the script, one is created automatically with a single empty `Default` category.
 
 ## Project structure
 
 | File | Purpose |
 |---|---|
-| `main.py` | Entry point — creates the UI window and starts the Tkinter event loop |
-| `ui.py` | All UI logic: category/profile selectors, the app list (Treeview), buttons, dialogs |
+| `main.py` | Entry point — parses `--startup`, sets up logging, creates the UI window and starts the Tkinter event loop |
+| `ui.py` | Main window UI logic: category/profile selectors, the app list (Treeview), buttons, dialogs, tray/hotkey lifecycle |
+| `settings_window.py` | Tabbed Settings window — global shortcut, Run at Startup, Start Minimized, config export/import |
 | `config.py` | `Config` class — loads/saves `config.json`, and all category/profile CRUD operations |
 | `launcher.py` | `AppLauncher` class — actually launches apps via `os.startfile()`, with error handling |
+| `tray.py` | `TrayIcon` — system tray icon and menu (pystray), theme-adaptive |
+| `hotkey.py` | `HotkeyManager` — registers the global show-window shortcut (`keyboard`) |
+| `startup.py` | `StartupManager` — Run at Startup via the `HKCU\...\Run` registry key |
+| `appscan.py` | Scans the Start Menu + Desktop for installed apps to populate the Add App picker (requires `pywin32`) |
+| `paths.py` | Shared helper for resolving paths whether running from source or frozen as a PyInstaller exe |
+| `applog.py` | Centralized rotating-file logging setup, including uncaught-exception handlers |
 | `tooltip.py` | Small reusable `ToolTip` widget used for showing full file paths on hover |
 | `config.json` | Your saved categories, apps, and profiles — created automatically, safe to back up |
+| `tests/` | Pytest suite covering `config.py`, `appscan.py`, `startup.py`, and the undo/trash/import fixes in `ui.py` |
 
 ## How the data is stored
 
@@ -81,8 +98,15 @@ If you have an older `config.json` from a previous version (a flat format withou
 
 Use **Edit** on an existing profile any time to change which categories it includes.
 
+## Settings
+
+Open **Settings...** from the menu bar for:
+
+- **General tab** — change the global shortcut that brings the window back from the tray; toggle **Run at Startup** (adds/removes a `HKCU\...\CurrentVersion\Run` registry entry, no admin rights needed); toggle **Start Minimized** for whether startup launches should skip straight to the tray. If the startup entry goes stale — e.g. you moved or re-cloned the project folder — a **Repair Startup Entry** button appears automatically.
+- **Backup tab** — export your categories/profiles to a JSON file, or import one (with merge/replace/skip choices per category on conflict).
+
 ## Notes / known limitations
 
 - The Trash/Undo history is **in-memory only** — it resets when you close the app. Removed apps are gone from `config.json` immediately (that part is permanent across restarts), but the *undo/trash UI* for viewing what was removed only lasts for the current session.
-- Category names are **case-sensitive** — `"Gaming"` and `"gaming"` can exist as two separate categories.
-- Have to know the location of an application you **want** to add to a category.
+- Category names are **case-insensitive** for uniqueness — `"Gaming"` and `"gaming"` can't both exist as separate categories (the typed casing is preserved, just not duplicated).
+- Only one level of undo is kept — removing a second app before undoing the first discards the ability to undo the first one.

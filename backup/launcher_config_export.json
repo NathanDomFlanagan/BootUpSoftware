@@ -1,0 +1,21 @@
+{
+    "categories": {
+        "Default": [
+            "C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe",
+            "C:/Users/Nathan/AppData/Local/Discord/app-1.0.9253/Discord.exe"
+        ],
+        "Gaming": [
+            "C:/Program Files (x86)/Steam/steam.exe"
+        ],
+        "Coding": [
+            "C:/Users/Nathan/AppData/Local/Programs/VSCodium/VSCodium.exe"
+        ]
+    },
+    "profiles": {
+        "Usual": [
+            "Default",
+            "Gaming",
+            "Coding"
+        ]
+    }
+}
