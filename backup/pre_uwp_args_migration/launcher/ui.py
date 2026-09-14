@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from tkinter import filedialog, simpledialog, messagebox, Menu
@@ -11,10 +12,6 @@ from hotkey import HotkeyManager
 from tray import TrayIcon
 from startup import StartupManager
 from settings_window import SettingsWindow
-from trash_window import TrashWindow
-from edit_profile_dialog import EditProfileDialog
-from edit_app_dialog import EditAppDialog
-from app_picker import AppPickerWindow
 import appscan
 
 log = logging.getLogger(__name__)
@@ -37,8 +34,8 @@ class LauncherUI(tb.Window):
         self.populate_categories()
         self.populate_profiles()
 
-        self.last_deleted = None  # (category, index, entry)
-        self.trash = []  # list of (original_category, entry)
+        self.last_deleted = None  # (category, index, name, path)
+        self.trash = []  # list of (original_category, name, path)
         self._refresh_undo_button()
 
         # Tray + global hotkey setup
@@ -142,7 +139,6 @@ class LauncherUI(tb.Window):
         self.tooltip = ToolTip(self.tree)
         self.tree.bind("<Motion>", self.on_tree_motion)
         self.tree.bind("<Leave>", lambda e: self.tooltip.hidetip())
-        self.tree.bind("<Double-1>", lambda e: self.edit_app())
 
         # Scrollbar
         scrollbar = tb.Scrollbar(mid_frame, orient="vertical", command=self.tree.yview)
@@ -156,9 +152,8 @@ class LauncherUI(tb.Window):
         tb.Button(bottom_frame, text="Run All", command=self.run_apps, bootstyle=SUCCESS).grid(row=0, column=0, padx=5)
         tb.Button(bottom_frame, text="Run Selected", command=self.run_selected, bootstyle=PRIMARY).grid(row=0, column=1, padx=5)
         tb.Button(bottom_frame, text="Add App", command=self.add_app, bootstyle=SECONDARY).grid(row=0, column=2, padx=5)
-        tb.Button(bottom_frame, text="Edit App", command=self.edit_app, bootstyle=INFO).grid(row=0, column=3, padx=5)
-        tb.Button(bottom_frame, text="Remove App", command=self.remove_app, bootstyle=DANGER).grid(row=0, column=4, padx=5)
-        tb.Button(bottom_frame, text="Trash", command=self.view_trash, bootstyle=SECONDARY).grid(row=0, column=5, padx=5)
+        tb.Button(bottom_frame, text="Remove App", command=self.remove_app, bootstyle=DANGER).grid(row=0, column=3, padx=5)
+        tb.Button(bottom_frame, text="Trash", command=self.view_trash, bootstyle=SECONDARY).grid(row=0, column=4, padx=5)
 
         # Separator between categories and profiles
         tb.Separator(self, orient=HORIZONTAL).pack(fill=X, padx=10, pady=(0, 10))
@@ -250,8 +245,9 @@ class LauncherUI(tb.Window):
         self.current_category = category
         self.tree.delete(*self.tree.get_children())
         apps = self.config_manager.categories.get(category, [])
-        for entry in apps:
-            self.tree.insert("", "end", values=(entry["name"], entry["path"]))
+        for path in apps:
+            name = Path(path).name
+            self.tree.insert("", "end", values=(name, path))
         self.set_status(f"Loaded {len(apps)} app(s) in '{category}'")
 
     def on_category_change(self, event=None):
@@ -275,26 +271,25 @@ class LauncherUI(tb.Window):
         if not self.last_deleted:
             return
 
-        category, index, entry = self.last_deleted
-        path = entry["path"]
+        category, index, name, path = self.last_deleted
 
         # Insert back into the list at the original index — but skip if
         # it's already there (e.g. it was already restored via the Trash
         # window before Undo was clicked), otherwise this would duplicate it.
         apps = self.config_manager.categories.get(category, [])
-        if not any(e["path"] == path for e in apps):
-            apps.insert(index, entry)
+        if path not in apps:
+            apps.insert(index, path)
             self.config_manager.save()
 
         # Remove the matching entry from trash so it can't also be restored
         # from there later, which would otherwise create a duplicate.
         self.trash = [
             t for t in self.trash
-            if not (t[0] == category and t[1]["path"] == path)
+            if not (t[0] == category and t[1] == name and t[2] == path)
         ]
 
         self.load_apps(category)
-        self.set_status(f"Restored: {entry['name']}")
+        self.set_status(f"Restored: {path}")
 
         # Clear undo buffer
         self.last_deleted = None
@@ -305,7 +300,33 @@ class LauncherUI(tb.Window):
             self._trash_window.lift()
             self._trash_window.focus_force()
             return
-        self._trash_window = TrashWindow(self)
+
+        win = tb.Toplevel(self)
+        self._trash_window = win
+        win.title("Trash")
+        win.geometry("600x300")
+
+        list_frame = tb.Frame(win)
+        list_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
+
+        tree = tb.Treeview(list_frame, columns=("category", "name", "path"), show="headings")
+        tree.bind("<Double-1>", lambda e: self.restore_from_trash(tree))
+        tree.heading("category", text="Original Category")
+        tree.heading("name", text="Name")
+        tree.heading("path", text="Path")
+        tree.column("category", width=150, anchor=W)
+        tree.column("name", width=200, anchor=W)
+        tree.column("path", width=400, anchor=W)
+        tree.pack(fill=BOTH, expand=True, side=LEFT)
+
+        scrollbar = tb.Scrollbar(list_frame, orient="vertical", command=tree.yview)
+        scrollbar.pack(side=RIGHT, fill=Y)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        for cat, name, path in self.trash:
+            tree.insert("", "end", values=(cat, name, path))
+
+        tb.Button(win, text="Close", command=win.destroy, bootstyle=SECONDARY).pack(pady=10)
 
     # Category actions
 
@@ -370,7 +391,132 @@ class LauncherUI(tb.Window):
             self.add_app_manual()
             return
 
-        AppPickerWindow(self, self.current_category)
+        self._open_app_picker()
+
+    def _open_app_picker(self):
+        entries, unresolved_count = appscan.scan_start_menu()
+
+        win = tb.Toplevel(self)
+        win.title("Add App")
+        win.geometry("760x480")
+
+        tb.Label(win, text=f"Adding to: {self.current_category} — select one or more").pack(pady=(10, 0))
+
+        search_row = tb.Frame(win)
+        search_row.pack(fill=X, padx=15, pady=10)
+
+        search_var = tb.StringVar()
+        search_entry = tb.Entry(search_row, textvariable=search_var)
+        search_entry.pack(side=LEFT, fill=X, expand=True)
+        search_entry.focus_set()
+
+        refresh_button = tb.Button(search_row, text="⟳ Refresh", bootstyle=SECONDARY)
+        refresh_button.pack(side=LEFT, padx=(8, 0))
+
+        list_frame = tb.Frame(win)
+        list_frame.pack(fill=BOTH, expand=True, padx=15)
+
+        # Shows both name and path — a name-only list can't distinguish two
+        # shortcuts that share a display name but point at different exes
+        # (e.g. two installed versions, or the same app in two Start Menu
+        # folders), so there's no way to tell which one you're picking.
+        tree = tb.Treeview(
+            list_frame, columns=("name", "path"), show="headings",
+            selectmode="extended", bootstyle=INFO
+        )
+        tree.heading("name", text="Name")
+        tree.heading("path", text="Path")
+        tree.column("name", width=220, anchor=W)
+        tree.column("path", width=460, anchor=W)
+        tree.pack(fill=BOTH, expand=True, side=LEFT)
+
+        scrollbar = tb.Scrollbar(list_frame, orient="vertical", command=tree.yview)
+        scrollbar.pack(side=RIGHT, fill=Y)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        # Tooltip for the full path, same pattern as the main app list.
+        picker_tooltip = ToolTip(tree)
+
+        def on_picker_tree_motion(event):
+            row_id = tree.identify_row(event.y)
+            if not row_id:
+                picker_tooltip.hidetip()
+                return
+            values = tree.item(row_id, "values")
+            if not values:
+                picker_tooltip.hidetip()
+                return
+            picker_tooltip.schedule(values[1])
+
+        tree.bind("<Motion>", on_picker_tree_motion)
+        tree.bind("<Leave>", lambda e: picker_tooltip.hidetip())
+
+        entry_by_row = {}
+
+        def populate(filter_text=""):
+            tree.delete(*tree.get_children())
+            entry_by_row.clear()
+            filter_lower = filter_text.lower()
+            for entry in entries:
+                if filter_lower and filter_lower not in entry.name.lower():
+                    continue
+                row_id = tree.insert("", "end", values=(entry.name, entry.target))
+                entry_by_row[row_id] = entry
+
+        def status_text():
+            msg = f"{len(entries)} app(s) found" if entries else "No apps found in Start Menu or Desktop"
+            if unresolved_count:
+                msg += f" — {unresolved_count} shortcut(s) couldn't be read"
+            return msg
+
+        status_var = tb.StringVar(value=status_text())
+        populate()
+
+        def on_search_change(*args):
+            populate(search_var.get())
+        search_var.trace_add("write", on_search_change)
+
+        def refresh_entries():
+            nonlocal entries, unresolved_count
+            entries, unresolved_count = appscan.scan_start_menu(refresh=True)
+            populate(search_var.get())
+            status_var.set(status_text())
+
+        refresh_button.configure(command=refresh_entries)
+
+        tb.Label(win, textvariable=status_var, bootstyle=SECONDARY).pack(pady=(5, 0))
+
+        def add_selected():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Info", "Select at least one app to add.")
+                return
+            added = 0
+            skipped = 0
+            for row_id in sel:
+                entry = entry_by_row.get(row_id)
+                if not entry:
+                    continue
+                if self.config_manager.add_app_to_category(self.current_category, entry.target):
+                    added += 1
+                else:
+                    skipped += 1
+            self.load_apps(self.current_category)
+            msg = f"Added {added} app(s) to '{self.current_category}'"
+            if skipped:
+                msg += f" ({skipped} already existed)"
+            self.set_status(msg)
+            win.destroy()
+
+        def browse_manually():
+            win.destroy()
+            self.add_app_manual()
+
+        btn_frame = tb.Frame(win)
+        btn_frame.pack(pady=10)
+        tb.Button(btn_frame, text="Add Selected", command=add_selected, bootstyle=SUCCESS).grid(row=0, column=0, padx=5)
+        tb.Button(btn_frame, text="Browse Manually...", command=browse_manually, bootstyle=SECONDARY).grid(row=0, column=1, padx=5)
+        tb.Button(btn_frame, text="Cancel", command=win.destroy, bootstyle=SECONDARY).grid(row=0, column=2, padx=5)
 
     def add_app_manual(self):
         """The original manual file-picker flow — used as a fallback when the
@@ -409,26 +555,27 @@ class LauncherUI(tb.Window):
 
         row_id = sel[0]
         index = self.tree.index(row_id)
-        apps = self.config_manager.categories.get(self.current_category, [])
-        if index >= len(apps):
+        values = self.tree.item(row_id, "values")
+        if not values:
             return
-        entry = apps[index]
+
+        app_name, app_path = values
 
         confirm = messagebox.askyesno(
             "Confirm Removal",
             f"Remove this application from '{self.current_category}'?\n\n"
-            f"Name: {entry['name']}\n"
-            f"Path: {entry['path']}"
+            f"Name: {app_name}\n"
+            f"Path: {app_path}"
         )
         if not confirm:
             return
 
         # store for undo
-        self.last_deleted = (self.current_category, index, entry)
+        self.last_deleted = (self.current_category, index, app_name, app_path)
         self._refresh_undo_button()
 
         # add to trash
-        self.trash.append((self.current_category, entry))
+        self.trash.append((self.current_category, app_name, app_path))
 
         removed = self.config_manager.remove_app_from_category(self.current_category, index)
         if removed is None:
@@ -436,23 +583,7 @@ class LauncherUI(tb.Window):
             return
 
         self.load_apps(self.current_category)
-        self.set_status(f"Removed: {removed['name']}")
-
-    def edit_app(self):
-        if not self.current_category:
-            return
-
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("Info", "Please select an app to edit.")
-            return
-
-        index = self.tree.index(sel[0])
-        apps = self.config_manager.categories.get(self.current_category, [])
-        if index >= len(apps):
-            return
-
-        EditAppDialog(self, self.current_category, index, apps[index])
+        self.set_status(f"Removed: {removed}")
 
     def run_apps(self):
         if not self.current_category:
@@ -471,13 +602,12 @@ class LauncherUI(tb.Window):
         if not sel:
             messagebox.showinfo("Info", "Please select an app to run.")
             return
-        index = self.tree.index(sel[0])
-        apps = self.config_manager.categories.get(self.current_category, [])
-        if index >= len(apps):
+        values = self.tree.item(sel[0], "values")
+        if not values:
             return
-        entry = apps[index]
-        self.launcher.launch_entry(entry)
-        self.set_status(f"Launched: {entry['name']}")
+        path = values[1]
+        self.launcher.launch_path(path)
+        self.set_status(f"Launched: {path}")
 
     def restore_from_trash(self, tree):
         sel = tree.selection()
@@ -497,25 +627,17 @@ class LauncherUI(tb.Window):
         if not confirm:
             return
 
-        # Find the full entry (carries args/working_dir, not just the
-        # name/path the Treeview happens to display) from trash.
-        matching_entry = next(
-            (e for c, e in self.trash if c == cat and e["path"] == path), None
-        )
-        if matching_entry is None:
-            return  # shouldn't happen, but be defensive
-
         # Insert back into category (skip if it's already there, e.g. it was
         # already restored via Undo)
         apps = self.config_manager.categories.get(cat, [])
-        if not any(e["path"] == path for e in apps):
-            apps.append(matching_entry)
+        if path not in apps:
+            apps.append(path)
             self.config_manager.save()
 
         # Remove from trash
         self.trash = [
             t for t in self.trash
-            if not (t[0] == cat and t[1]["path"] == path)
+            if not (t[0] == cat and t[1] == name and t[2] == path)
         ]
 
         # If this is the item Undo would restore, clear it — it's already
@@ -523,7 +645,7 @@ class LauncherUI(tb.Window):
         # it wouldn't do anything now that the duplicate-guard is in place,
         # but it shouldn't still look actionable).
         if self.last_deleted is not None and self.last_deleted[0] == cat \
-                and self.last_deleted[2]["path"] == path:
+                and self.last_deleted[2] == name and self.last_deleted[3] == path:
             self.last_deleted = None
             self._refresh_undo_button()
 
@@ -605,7 +727,79 @@ class LauncherUI(tb.Window):
         if not name:
             messagebox.showinfo("Info", "Please select a profile first.")
             return
-        EditProfileDialog(self, name)
+
+        all_cats = list(self.config_manager.categories.keys())
+        current = set(self.config_manager.profiles.get(name, []))
+
+        win = tb.Toplevel(self)
+        win.title(f"Edit Profile: {name}")
+        win.geometry("300x400")
+
+        tb.Label(win, text=f"Select categories for '{name}':").pack(pady=(10, 5))
+
+        # Scrollable list of checkboxes — a plain Frame would just clip once
+        # there are more categories than fit in the fixed window height,
+        # with no way to reach the rest short of manually resizing the
+        # window. Canvas + Scrollbar is the standard Tkinter pattern for a
+        # scrollable region, since ttk has no native scrollable frame.
+        list_container = tb.Frame(win)
+        list_container.pack(fill=BOTH, expand=True, padx=15)
+
+        canvas = tb.Canvas(list_container, highlightthickness=0)
+        canvas.pack(side=LEFT, fill=BOTH, expand=True)
+
+        list_scrollbar = tb.Scrollbar(list_container, orient="vertical", command=canvas.yview)
+        list_scrollbar.pack(side=RIGHT, fill=Y)
+        canvas.configure(yscrollcommand=list_scrollbar.set)
+
+        check_frame = tb.Frame(canvas)
+        check_frame_window = canvas.create_window((0, 0), window=check_frame, anchor="nw")
+
+        def on_check_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        check_frame.bind("<Configure>", on_check_frame_configure)
+
+        def on_canvas_configure(event):
+            # Keep the inner frame's width matched to the canvas so it
+            # doesn't get stuck at a stale width if the window is resized.
+            canvas.itemconfigure(check_frame_window, width=event.width)
+
+        canvas.bind("<Configure>", on_canvas_configure)
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        # Scope the mousewheel binding to while the cursor is actually over
+        # this canvas, rather than binding it globally for the window's
+        # whole lifetime.
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        vars_by_cat = {}
+        for cat in all_cats:
+            var = tb.BooleanVar(value=(cat in current))
+            vars_by_cat[cat] = var
+            tb.Checkbutton(check_frame, text=cat, variable=var, bootstyle="round-toggle").pack(anchor=W, pady=2, padx=5)
+
+        def close_window():
+            # The mousewheel binding is global (bind_all) while the cursor
+            # is over the canvas — make sure it can't outlive the window.
+            canvas.unbind_all("<MouseWheel>")
+            win.destroy()
+
+        def save_and_close():
+            selected = [c for c, v in vars_by_cat.items() if v.get()]
+            self.config_manager.set_profile_categories(name, selected)
+            self.set_status(f"Updated profile '{name}' ({len(selected)} categor{'y' if len(selected) == 1 else 'ies'})")
+            close_window()
+
+        win.protocol("WM_DELETE_WINDOW", close_window)
+
+        btn_frame = tb.Frame(win)
+        btn_frame.pack(pady=10)
+        tb.Button(btn_frame, text="Save", command=save_and_close, bootstyle=SUCCESS).grid(row=0, column=0, padx=5)
+        tb.Button(btn_frame, text="Cancel", command=close_window, bootstyle=SECONDARY).grid(row=0, column=1, padx=5)
 
     # Tray / hotkey / window lifecycle
 

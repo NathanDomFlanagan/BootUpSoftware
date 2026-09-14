@@ -10,7 +10,10 @@ not the Tkinter main thread. Tkinter is not thread-safe, so callers must
 marshal back onto the main thread themselves (e.g. via `root.after(0, ...)`)
 rather than touching widgets directly inside the callback.
 """
+import logging
 import keyboard
+
+log = logging.getLogger(__name__)
 
 
 class HotkeyManager:
@@ -25,19 +28,33 @@ class HotkeyManager:
         combo = combo.strip().lower()
         if not combo:
             return False
+
+        def _safe_callback():
+            # The hotkey fires on keyboard's own listener thread. If `callback`
+            # raises here, an unhandled exception could kill that thread —
+            # silently disabling the hotkey with no visible error. Catch and
+            # log instead so the listener keeps running.
+            try:
+                callback()
+            except Exception:
+                log.exception("Error handling hotkey '%s'", combo)
+
         try:
-            keyboard.add_hotkey(combo, callback)
+            keyboard.add_hotkey(combo, _safe_callback)
             self._current_combo = combo
+            log.info("Registered hotkey '%s'", combo)
             return True
         except Exception:
+            log.exception("Failed to register hotkey '%s'", combo)
             return False
 
     def unregister(self):
         if self._current_combo:
             try:
                 keyboard.remove_hotkey(self._current_combo)
+                log.info("Unregistered hotkey '%s'", self._current_combo)
             except Exception:
-                pass
+                log.exception("Failed to unregister hotkey '%s'", self._current_combo)
             self._current_combo = None
 
     @property

@@ -14,23 +14,6 @@ def _is_default_category(name: str) -> bool:
     return name.strip().lower() == "default"
 
 
-def normalize_app_entry(entry) -> dict:
-    """Coerces an app entry into the current {"path", "name", "args",
-    "working_dir"} shape. Accepts either that dict shape (from a current
-    config or export) or a bare path string (from an older config/export,
-    predating per-app names/arguments) — the plain-string case derives its
-    display name from the path's filename, same as the old behavior."""
-    if isinstance(entry, str):
-        return {"path": entry, "name": Path(entry).name, "args": "", "working_dir": ""}
-    path = entry.get("path", "")
-    return {
-        "path": path,
-        "name": entry.get("name") or Path(path).name,
-        "args": entry.get("args", ""),
-        "working_dir": entry.get("working_dir", ""),
-    }
-
-
 def _resolve_config_path() -> Path:
     if is_frozen():
         external = app_dir(__file__) / CONFIG_NAME
@@ -96,23 +79,10 @@ class Config:
                 if k != "profiles" and isinstance(v, list)
             }
             self.data["profiles"] = profiles
-            needs_save = True
+            self.save()
         else:
             self.data = raw
             self.data.setdefault("profiles", {})
-            needs_save = False
-
-        # Backward compatibility: app entries used to be plain path strings
-        # rather than {"path", "name", "args", "working_dir"} dicts (added
-        # to support UWP/Store apps and per-app launch arguments). Normalize
-        # in place so the rest of the app never has to handle both shapes.
-        for cat, apps in self.categories.items():
-            if any(isinstance(e, str) for e in apps):
-                self.categories[cat] = [normalize_app_entry(e) for e in apps]
-                needs_save = True
-
-        if needs_save:
-            self.save()
 
     def save(self):
         try:
@@ -209,19 +179,12 @@ class Config:
         self.save()
         return True
 
-    def add_app_to_category(self, category: str, path: str, name: str = None,
-                             args: str = "", working_dir: str = ""):
+    def add_app_to_category(self, category: str, path: str):
         if category not in self.categories:
             return False
-        if any(e["path"] == path for e in self.categories[category]):
+        if path in self.categories[category]:
             return False
-        entry = {
-            "path": path,
-            "name": name or Path(path).name,
-            "args": args,
-            "working_dir": working_dir,
-        }
-        self.categories[category].append(entry)
+        self.categories[category].append(path)
         self.save()
         return True
 
@@ -234,28 +197,6 @@ class Config:
             return None
         self.save()
         return removed
-
-    def update_app(self, category: str, index: int, path: str, name: str = None,
-                    args: str = "", working_dir: str = ""):
-        """Overwrites the app entry at `index` with new field values — used
-        by the Edit App dialog to change name/path/arguments/working
-        directory for an existing entry. Returns False if the index is out
-        of range, or another entry in the category already uses that path."""
-        if category not in self.categories:
-            return False
-        apps = self.categories[category]
-        if index < 0 or index >= len(apps):
-            return False
-        if any(i != index and e["path"] == path for i, e in enumerate(apps)):
-            return False
-        apps[index] = {
-            "path": path,
-            "name": name or Path(path).name,
-            "args": args,
-            "working_dir": working_dir,
-        }
-        self.save()
-        return True
 
     # Profile management
 
@@ -303,16 +244,15 @@ class Config:
         return True
 
     def get_profile_apps(self, name: str):
-        """Flattened, de-duplicated (by path) list of app entries across all
-        categories in a profile."""
+        """Flattened, de-duplicated list of app paths across all categories in a profile."""
         cats = self.profiles.get(name, [])
         seen = set()
         apps = []
         for c in cats:
-            for entry in self.categories.get(c, []):
-                if entry["path"] not in seen:
-                    seen.add(entry["path"])
-                    apps.append(entry)
+            for path in self.categories.get(c, []):
+                if path not in seen:
+                    seen.add(path)
+                    apps.append(path)
         return apps
 
     # Export / import
@@ -348,18 +288,14 @@ class Config:
     def import_category(self, name: str, apps: list, mode: str):
         """mode: 'add' (name doesn't exist locally yet), 'replace' (overwrite
         the existing category's app list), or 'combine' (merge app lists,
-        skipping duplicate paths). `apps` entries may be plain path strings
-        (an older export) or the current dict shape — normalized either way."""
-        normalized = [normalize_app_entry(e) for e in apps]
+        skipping duplicate paths)."""
         if mode in ("add", "replace"):
-            self.categories[name] = normalized
+            self.categories[name] = list(apps)
         elif mode == "combine":
             existing = self.categories.setdefault(name, [])
-            existing_paths = {e["path"] for e in existing}
-            for entry in normalized:
-                if entry["path"] not in existing_paths:
-                    existing.append(entry)
-                    existing_paths.add(entry["path"])
+            for path in apps:
+                if path not in existing:
+                    existing.append(path)
         self.save()
 
     def import_profiles(self, profiles: dict):

@@ -1,9 +1,52 @@
 {
     "categories": {
+        "Default": [
+            {
+                "path": "C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe",
+                "name": "brave.exe",
+                "args": "",
+                "working_dir": ""
+            },
+            {
+                "path": "C:\\Users\\Nathan\\AppData\\Local\\Discord\\app-1.0.9257\\Discord.exe",
+                "name": "Discord",
+                "args": "",
+                "working_dir": ""
+            }
+        ],
+        "Gaming": [
+            {
+                "path": "C:/Program Files (x86)/Steam/steam.exe",
+                "name": "steam.exe",
+                "args": "",
+                "working_dir": ""
+            }
+        ],
+        "Coding": [
+            {
+                "path": "C:/Users/Nathan/AppData/Local/Programs/VSCodium/VSCodium.exe",
+                "name": "VSCodium.exe",
+                "args": "",
+                "working_dir": ""
+            },
+            {
+                "path": "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude",
+                "name": "Claude",
+                "args": "",
+                "working_dir": ""
+            }
+        ]
     },
     "profiles": {
+        "Usual": [
+            "Default",
+            "Gaming",
+            "Coding"
+        ]
     },
     "settings": {
-        "hotkey": "ctrl+alt+l"
+        "hotkey": "ctrl+alt+l",
+        "start_minimized": false,
+        "autostart_profile": "Usual"
     }
 }

@@ -1,0 +1,8 @@
+ttkbootstrap
+keyboard
+pystray
+pillow
+pywin32
+
+# Dev/testing only — not needed to run the app itself
+pytest

@@ -1,2 +1,0 @@
-Run
- - py test.py
