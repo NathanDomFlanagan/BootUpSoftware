@@ -1,10 +1,17 @@
 """
 Tests for startup.py — Run-at-login via the HKCU Run registry key, and the
-is_up_to_date() repair detection logic. This specifically guards against the
-bug we found in the old shortcut-based implementation where comparing
-"expected" against a stale value could trivially match even after the
-project folder moved — is_up_to_date() must check real file existence, not
-just string equality.
+is_up_to_date() repair detection logic. This specifically guards against two
+bugs we found:
+
+1. In the old shortcut-based implementation, comparing "expected" against a
+   stale value could trivially match even after the project folder moved —
+   is_up_to_date() must check real file existence, not just string equality.
+2. The registry command used to conditionally include --startup only when
+   the "Start Minimized" preference was on, so a user with that preference
+   off never actually got flagged as "launched at startup" at all — silently
+   breaking the Startup Profile feature for them. --startup must always be
+   present in the registry command; Start Minimized is read live from
+   config.json instead of being baked into the command line.
 
 Run with: pytest tests/test_startup.py
 """
@@ -84,7 +91,7 @@ class TestNoWinreg:
 
     def test_enable_fails_gracefully(self, monkeypatch):
         monkeypatch.setattr(startup, "WINREG_AVAILABLE", False)
-        assert startup.StartupManager().enable(True) is False
+        assert startup.StartupManager().enable() is False
 
     def test_is_enabled_false(self, monkeypatch):
         monkeypatch.setattr(startup, "WINREG_AVAILABLE", False)
@@ -92,18 +99,27 @@ class TestNoWinreg:
 
     def test_is_up_to_date_defaults_true_to_avoid_false_repair_prompt(self, monkeypatch):
         monkeypatch.setattr(startup, "WINREG_AVAILABLE", False)
-        assert startup.StartupManager().is_up_to_date(True) is True
+        assert startup.StartupManager().is_up_to_date() is True
 
 
 class TestEnableDisable:
     def test_enable_writes_registry_value(self, fake_registry, fake_project):
         mgr = startup.StartupManager()
-        assert mgr.enable(start_minimized=True) is True
+        assert mgr.enable() is True
         assert mgr.is_enabled() is True
+
+    def test_enable_always_includes_the_startup_flag(self, fake_registry, fake_project):
+        """Regression test: the registry command must always signal
+        --startup regardless of the Start Minimized preference — that
+        preference is read live from config.json at launch instead, not
+        baked into the command line."""
+        mgr = startup.StartupManager()
+        mgr.enable()
+        assert "--startup" in fake_registry[startup.REGISTRY_VALUE_NAME]
 
     def test_disable_removes_registry_value(self, fake_registry, fake_project):
         mgr = startup.StartupManager()
-        mgr.enable(True)
+        mgr.enable()
         assert mgr.disable() is True
         assert mgr.is_enabled() is False
 
@@ -115,12 +131,12 @@ class TestEnableDisable:
 class TestUpToDateDetection:
     def test_freshly_enabled_is_up_to_date(self, fake_registry, fake_project):
         mgr = startup.StartupManager()
-        mgr.enable(True)
-        assert mgr.is_up_to_date(True) is True
+        mgr.enable()
+        assert mgr.is_up_to_date() is True
 
     def test_nothing_registered_counts_as_up_to_date(self, fake_registry, fake_project):
         mgr = startup.StartupManager()
-        assert mgr.is_up_to_date(True) is True
+        assert mgr.is_up_to_date() is True
 
     def test_moved_project_folder_is_detected_as_stale(self, fake_registry, fake_project, monkeypatch):
         """The core regression test: renaming the project folder after the
@@ -128,28 +144,23 @@ class TestUpToDateDetection:
         running process's own __file__ is equally stale and would otherwise
         match the (also stale) stored command trivially."""
         mgr = startup.StartupManager()
-        mgr.enable(True)
-        assert mgr.is_up_to_date(True) is True  # sanity check before the move
+        mgr.enable()
+        assert mgr.is_up_to_date() is True  # sanity check before the move
 
         moved_dir = fake_project.parent / "launcher_MOVED"
         fake_project.rename(moved_dir)
 
-        assert mgr.is_up_to_date(True) is False
+        assert mgr.is_up_to_date() is False
 
     def test_repair_after_move_restores_up_to_date(self, fake_registry, fake_project, monkeypatch):
         mgr = startup.StartupManager()
-        mgr.enable(True)
+        mgr.enable()
 
         moved_dir = fake_project.parent / "launcher_MOVED"
         fake_project.rename(moved_dir)
-        assert mgr.is_up_to_date(True) is False
+        assert mgr.is_up_to_date() is False
 
         # Simulate restarting the app from the new location
         monkeypatch.setattr(startup, "__file__", str(moved_dir / "startup.py"))
-        mgr.enable(True)
-        assert mgr.is_up_to_date(True) is True
-
-    def test_toggling_start_minimized_is_detected_as_stale(self, fake_registry, fake_project):
-        mgr = startup.StartupManager()
-        mgr.enable(start_minimized=True)
-        assert mgr.is_up_to_date(start_minimized=False) is False
+        mgr.enable()
+        assert mgr.is_up_to_date() is True

@@ -95,7 +95,7 @@ class SettingsWindow(tb.Toplevel):
     def _refresh_repair_notice(self):
         for widget in self.repair_frame.winfo_children():
             widget.destroy()
-        if self.login_var.get() and not self.app.startup_manager.is_up_to_date(self.minimized_var.get()):
+        if self.login_var.get() and not self.app.startup_manager.is_up_to_date():
             tb.Button(
                 self.repair_frame, text="⚠ Repair Startup Entry...",
                 command=self._repair, bootstyle=WARNING
@@ -123,7 +123,7 @@ class SettingsWindow(tb.Toplevel):
     def _toggle_run_at_startup(self):
         want_enabled = self.login_var.get()
         if want_enabled:
-            if not self.app.startup_manager.enable(self.app.config_manager.get_start_minimized()):
+            if not self.app.startup_manager.enable():
                 messagebox.showerror(
                     "Startup Error",
                     "Could not create the startup entry. Check launcher.log for details.",
@@ -147,11 +147,9 @@ class SettingsWindow(tb.Toplevel):
     def _toggle_start_minimized(self):
         value = self.minimized_var.get()
         self.app.config_manager.set_start_minimized(value)
-        # If the startup entry already exists, update it immediately to
-        # match — otherwise this is just a remembered preference for next
-        # time Run at Startup gets enabled.
-        if self.app.startup_manager.is_enabled():
-            self.app.startup_manager.enable(value)
+        # No need to touch the registry entry — the command line it holds
+        # doesn't encode this preference; the app reads it live from
+        # config.json each time it actually launches at startup.
         self.app.set_status(f"Start minimized at startup: {'On' if value else 'Off'}")
         self._refresh_repair_notice()
 
@@ -164,7 +162,7 @@ class SettingsWindow(tb.Toplevel):
         )
 
     def _repair(self):
-        if self.app.startup_manager.enable(self.app.config_manager.get_start_minimized()):
+        if self.app.startup_manager.enable():
             self.app.set_status("Startup entry repaired")
         else:
             messagebox.showerror(

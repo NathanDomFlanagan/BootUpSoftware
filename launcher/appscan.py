@@ -176,6 +176,11 @@ def _run_get_start_apps():
             ["powershell", "-NoProfile", "-NonInteractive", "-Command",
              "Get-StartApps | ConvertTo-Json -Compress"],
             capture_output=True, text=True, timeout=15,
+            # Without this, a GUI app (no console of its own) spawning a
+            # console subprocess still gets a briefly-visible console
+            # window flash on Windows. getattr() keeps this a no-op on
+            # non-Windows, where the attribute doesn't exist.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
         log.debug("Could not run Get-StartApps", exc_info=True)

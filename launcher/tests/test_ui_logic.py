@@ -312,10 +312,45 @@ class TestWindowDedup:
         fake_window.focus_force.assert_called_once()
 
 
+class TestApplyStartupBehavior:
+    """_apply_startup_behavior() is called from __init__ only when launched
+    via --startup (i.e. at actual Windows login). Regression coverage for
+    the bug where it used to only run _maybe_run_autostart_profile when
+    Start Minimized was also on — a user with that preference off never
+    got their Startup Profile launched at all, since --startup itself was
+    only added to the registry command when start_minimized was true."""
+
+    def test_runs_autostart_profile_even_when_not_starting_minimized(self, tmp_path):
+        c = _make_config(tmp_path)
+        c.set_start_minimized(False)
+        ui = _make_ui(c)
+        ui.after = MagicMock()
+
+        ui._apply_startup_behavior()
+
+        # minimize_to_tray must NOT be scheduled...
+        scheduled_callbacks = [call.args[1] for call in ui.after.call_args_list]
+        assert ui.minimize_to_tray not in scheduled_callbacks
+        # ...but the autostart profile check must still be scheduled regardless.
+        assert ui._maybe_run_autostart_profile in scheduled_callbacks
+
+    def test_schedules_minimize_when_start_minimized_is_on(self, tmp_path):
+        c = _make_config(tmp_path)
+        c.set_start_minimized(True)
+        ui = _make_ui(c)
+        ui.after = MagicMock()
+
+        ui._apply_startup_behavior()
+
+        scheduled_callbacks = [call.args[1] for call in ui.after.call_args_list]
+        assert ui.minimize_to_tray in scheduled_callbacks
+        assert ui._maybe_run_autostart_profile in scheduled_callbacks
+
+
 class TestAutostartProfile:
-    """_maybe_run_autostart_profile() is only ever called from __init__ when
-    start_minimized is True (i.e. launched via --startup at Windows login),
-    so it's tested directly here rather than by driving __init__ itself."""
+    """_maybe_run_autostart_profile() is called from _apply_startup_behavior()
+    (see TestApplyStartupBehavior above), so it's tested directly here
+    rather than by driving __init__ itself."""
 
     def test_does_nothing_when_no_profile_configured(self, tmp_path):
         c = _make_config(tmp_path)
