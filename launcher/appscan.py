@@ -26,9 +26,11 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 try:
+    import pythoncom
     import win32com.client
     WIN32_AVAILABLE = True
 except ImportError:
+    pythoncom = None
     win32com = None
     WIN32_AVAILABLE = False
     log.warning("pywin32 not installed — Start Menu app discovery is unavailable")
@@ -103,48 +105,61 @@ def scan_start_menu(refresh: bool = False):
     if _cache is not None and not refresh:
         return _cache
 
+    # COM requires CoInitialize on whichever thread uses it. This is often
+    # already satisfied implicitly for the main thread (Tkinter and other
+    # libraries tend to initialize COM as a side effect), but this function
+    # can also run on a plain background thread (see app_picker.py), which
+    # starts with no COM apartment at all — Dispatch() then fails with
+    # "CoInitialize has not been called." Safe to call even if this thread
+    # already has COM initialized (it just increments a per-thread refcount
+    # that CoUninitialize decrements, so it never steals another caller's
+    # apartment).
+    pythoncom.CoInitialize()
     try:
-        shell = win32com.client.Dispatch("WScript.Shell")
-    except Exception:
-        log.exception("Failed to create WScript.Shell for Start Menu scan")
-        return [], 0
+        try:
+            shell = win32com.client.Dispatch("WScript.Shell")
+        except Exception:
+            log.exception("Failed to create WScript.Shell for Start Menu scan")
+            return [], 0
 
-    results = []
-    seen_targets = set()
-    skipped = 0
+        results = []
+        seen_targets = set()
+        skipped = 0
 
-    for folder in _shortcut_scan_folders():
-        if not folder.exists():
-            continue
-        for lnk_path in folder.rglob("*.lnk"):
-            name = lnk_path.stem
-            if _is_noise(name):
+        for folder in _shortcut_scan_folders():
+            if not folder.exists():
                 continue
-            try:
-                shortcut = shell.CreateShortCut(str(lnk_path))
-                target = shortcut.TargetPath
-            except Exception:
-                log.debug("Could not resolve shortcut: %s", lnk_path, exc_info=True)
-                skipped += 1
-                continue
+            for lnk_path in folder.rglob("*.lnk"):
+                name = lnk_path.stem
+                if _is_noise(name):
+                    continue
+                try:
+                    shortcut = shell.CreateShortCut(str(lnk_path))
+                    target = shortcut.TargetPath
+                except Exception:
+                    log.debug("Could not resolve shortcut: %s", lnk_path, exc_info=True)
+                    skipped += 1
+                    continue
 
-            if not target or not target.lower().endswith(".exe"):
-                continue  # skip shortcuts to URLs, docs, installers left behind, etc.
-            if not Path(target).exists():
-                continue  # broken/stale shortcut
-            if target in seen_targets:
-                continue  # same program listed under more than one shortcut
+                if not target or not target.lower().endswith(".exe"):
+                    continue  # skip shortcuts to URLs, docs, installers left behind, etc.
+                if not Path(target).exists():
+                    continue  # broken/stale shortcut
+                if target in seen_targets:
+                    continue  # same program listed under more than one shortcut
 
-            seen_targets.add(target)
-            results.append(AppEntry(name=name, target=target, shortcut_path=str(lnk_path)))
+                seen_targets.add(target)
+                results.append(AppEntry(name=name, target=target, shortcut_path=str(lnk_path)))
 
-    results.sort(key=lambda e: e.name.lower())
-    log.info(
-        "Start Menu/Desktop scan found %d candidate app(s), %d shortcut(s) unresolved",
-        len(results), skipped
-    )
-    _cache = (results, skipped)
-    return _cache
+        results.sort(key=lambda e: e.name.lower())
+        log.info(
+            "Start Menu/Desktop scan found %d candidate app(s), %d shortcut(s) unresolved",
+            len(results), skipped
+        )
+        _cache = (results, skipped)
+        return _cache
+    finally:
+        pythoncom.CoUninitialize()
 
 
 def _run_get_start_apps():
