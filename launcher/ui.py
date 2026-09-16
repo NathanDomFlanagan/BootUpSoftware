@@ -1,11 +1,13 @@
 import logging
 import os
-import ttkbootstrap as tb
-from ttkbootstrap.constants import *
-from tkinter import filedialog, simpledialog, messagebox, Menu
+import tkinter as tk
+import tkinter.ttk as ttk
+
+import customtkinter as ctk
+from tkinter import filedialog, Menu
 
 from config import Config
-from launcher import AppLauncher
+from launcher import AppLauncher, EXECUTABLE_FILETYPES
 from tooltip import ToolTip
 from hotkey import HotkeyManager
 from tray import TrayIcon
@@ -15,27 +17,53 @@ from trash_window import TrashWindow
 from edit_profile_dialog import EditProfileDialog
 from edit_app_dialog import EditAppDialog
 from app_picker import AppPickerWindow
+import ctk_theme as theme
+import ctk_dialogs as dialogs
+import ctk_widgets as widgets
 import appscan
 
 log = logging.getLogger(__name__)
 
 
-class LauncherUI(tb.Window):
+class LauncherUI(ctk.CTk):
     def __init__(self, launched_at_startup: bool = False):
-        super().__init__(title="App Launcher", themename="darkly")
-        self.geometry("800x560")
+        super().__init__()
+        self.title("App Launcher")
 
         self.config_manager = Config()
         self.launcher = AppLauncher()
+        # An instance attribute rather than calling the ctk_dialogs module
+        # directly — every action method below goes through self.dialogs,
+        # so a test can substitute a fake dialogs object on one instance
+        # (e.g. ui_instance.dialogs = MagicMock()) instead of needing to
+        # know and patch this module's exact internal import alias, which
+        # breaks every time the dialog implementation itself changes.
+        self.dialogs = dialogs
+        theme.set_mode("dark" if self.config_manager.get_dark_mode() else "light")
 
         self.current_category = None
         self.tooltip = None
         self._settings_window = None
         self._trash_window = None
+        self._edit_profile_window = None
 
         self.create_widgets()
         self.populate_categories()
         self.populate_profiles()
+
+        # The window's natural width depends on how wide its button rows end
+        # up (which varies with font metrics/DPI), so size it from the
+        # widgets' actual layout requirements rather than a fixed pixel
+        # guess — a hardcoded "800x560" here previously fell behind as
+        # buttons grew wider, clipping the profiles row at launch until the
+        # window was resized by hand. minsize() also stops the reverse
+        # problem: without a floor, dragging the window smaller than its
+        # content clips the same way instead of refusing to shrink further.
+        self.update_idletasks()
+        min_width = self.winfo_reqwidth()
+        min_height = self.winfo_reqheight()
+        self.minsize(min_width, min_height)
+        self.geometry(f"{min_width}x{max(min_height, 560)}")
 
         self.last_deleted = None  # (category, index, entry)
         self.trash = []  # list of (original_category, entry)
@@ -76,19 +104,20 @@ class LauncherUI(tb.Window):
         self.after(20, self._maybe_run_autostart_profile)
 
     def _style_menu(self, menu: Menu):
-        """Native tk.Menu widgets aren't ttk, so they don't auto-follow the
-        ttkbootstrap theme — apply the current theme's palette by hand.
-        Note: on Windows the top-level menu *bar* strip is drawn by the OS
-        and ignores these colors regardless; only the dropdown panels that
-        open from it are actually themeable this way."""
-        colors = self.style.colors
+        """Native tk.Menu widgets have no CustomTkinter equivalent — there's
+        no CTk menu bar widget at all — so this hand-applies a palette
+        matching the rest of the CTk-themed window and the current
+        light/dark mode. Note: on Windows the top-level menu *bar* strip is
+        drawn by the OS and ignores these colors regardless; only the
+        dropdown panels that open from it are actually themeable this way."""
+        colors = theme.menu_colors()
         menu.configure(
-            background=colors.bg,
-            foreground=colors.fg,
-            activebackground=colors.selectbg,
-            activeforeground=colors.selectfg,
-            disabledforeground=colors.border,
-            selectcolor=colors.primary,
+            background=colors["bg"],
+            foreground=colors["fg"],
+            activebackground=theme.PRIMARY,
+            activeforeground="white",
+            disabledforeground=colors["disabled_fg"],
+            selectcolor=theme.PRIMARY,
             relief="flat",
             borderwidth=0,
             activeborderwidth=0,
@@ -102,52 +131,56 @@ class LauncherUI(tb.Window):
         self._style_menu(self.menu_bar)
         self.config(menu=self.menu_bar)
 
-        file_menu = Menu(self.menu_bar, tearoff=False)
-        self._style_menu(file_menu)
-        file_menu.add_command(label="Export Config...", command=self.export_config)
-        file_menu.add_command(label="Import Config...", command=self.import_config)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.quit_app)
-        self.menu_bar.add_cascade(label="File", menu=file_menu)
+        self.file_menu = Menu(self.menu_bar, tearoff=False)
+        self._style_menu(self.file_menu)
+        self.file_menu.add_command(label="Export Config...", command=self.export_config)
+        self.file_menu.add_command(label="Import Config...", command=self.import_config)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Exit", command=self.quit_app)
+        self.menu_bar.add_cascade(label="File", menu=self.file_menu)
 
         self.menu_bar.add_command(label="Settings...", command=self.open_settings)
 
         # Top frame: category selector
-        top_frame = tb.Frame(self)
-        top_frame.pack(fill=X, padx=10, pady=10)
+        top_frame = ctk.CTkFrame(self, fg_color="transparent")
+        top_frame.pack(fill="x", padx=theme.PAD_NORMAL, pady=theme.PAD_NORMAL)
 
-        tb.Label(top_frame, text="Category:").pack(side=LEFT)
-        self.category_var = tb.StringVar()
-        self.category_combo = tb.Combobox(
+        widgets.FieldLabel(top_frame, text="Category:").pack(side="left")
+        self.category_var = tk.StringVar()
+        self.category_combo = widgets.PrimaryOptionMenu(
             top_frame,
-            textvariable=self.category_var,
-            state="readonly",
-            width=30
+            variable=self.category_var,
+            values=[],
+            command=self.on_category_change,
+            width=250,
         )
-        self.category_combo.pack(side=LEFT, fill=X, expand=True, padx=10)
-        self.category_combo.bind("<<ComboboxSelected>>", self.on_category_change)
+        self.category_combo.pack(side="left", fill="x", expand=True, padx=theme.PAD_NORMAL)
 
         # Buttons for category management
-        tb.Button(top_frame, text="New", command=self.new_category, bootstyle=SUCCESS).pack(side=LEFT, padx=5)
-        tb.Button(top_frame, text="Rename", command=self.rename_category, bootstyle=INFO).pack(side=LEFT, padx=5)
-        tb.Button(top_frame, text="Delete", command=self.remove_category, bootstyle=DANGER).pack(side=LEFT, padx=5)
+        widgets.SuccessButton(
+            top_frame, text="＋ New", command=self.new_category, width=95,
+        ).pack(side="left", padx=theme.PAD_TIGHT)
+        widgets.PrimaryButton(
+            top_frame, text="✎ Rename", command=self.rename_category, width=95,
+        ).pack(side="left", padx=theme.PAD_TIGHT)
+        widgets.DangerButton(
+            top_frame, text="🗑 Delete", command=self.remove_category, width=95,
+        ).pack(side="left", padx=theme.PAD_TIGHT)
 
-        # Treeview for apps
-        mid_frame = tb.Frame(self)
-        mid_frame.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
+        # Treeview for apps — stays plain ttk (mode-styled via ctk_theme) since
+        # CustomTkinter has no Treeview equivalent.
+        theme.apply_treeview_style()
+
+        mid_frame = ctk.CTkFrame(self, fg_color="transparent")
+        mid_frame.pack(fill="both", expand=True, padx=theme.PAD_NORMAL, pady=(0, theme.PAD_NORMAL))
 
         columns = ("name", "path")
-        self.tree = tb.Treeview(
-            mid_frame,
-            columns=columns,
-            show="headings",
-            bootstyle=INFO
-        )
+        self.tree = ttk.Treeview(mid_frame, columns=columns, show="headings")
         self.tree.heading("name", text="Name")
         self.tree.heading("path", text="Path")
-        self.tree.column("name", width=200, anchor=W)
-        self.tree.column("path", width=500, anchor=W)
-        self.tree.pack(fill=BOTH, expand=True, side=LEFT)
+        self.tree.column("name", width=200, anchor="w")
+        self.tree.column("path", width=500, anchor="w")
+        self.tree.pack(fill="both", expand=True, side="left")
 
         # Tooltip for full path
         self.tooltip = ToolTip(self.tree)
@@ -156,71 +189,93 @@ class LauncherUI(tb.Window):
         self.tree.bind("<Double-1>", lambda e: self.edit_app())
 
         # Scrollbar
-        scrollbar = tb.Scrollbar(mid_frame, orient="vertical", command=self.tree.yview)
-        scrollbar.pack(side=RIGHT, fill=Y)
+        scrollbar = ctk.CTkScrollbar(mid_frame, orientation="vertical", command=self.tree.yview)
+        scrollbar.pack(side="right", fill="y")
         self.tree.configure(yscrollcommand=scrollbar.set)
 
         # Bottom buttons (category-level app actions)
-        bottom_frame = tb.Frame(self)
-        bottom_frame.pack(pady=(0, 10))
+        bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
+        bottom_frame.pack(pady=(0, theme.PAD_NORMAL))
 
-        tb.Button(bottom_frame, text="Run All", command=self.run_apps, bootstyle=SUCCESS).grid(row=0, column=0, padx=5)
-        tb.Button(bottom_frame, text="Run Selected", command=self.run_selected, bootstyle=PRIMARY).grid(row=0, column=1, padx=5)
-        tb.Button(bottom_frame, text="Add App", command=self.add_app, bootstyle=SECONDARY).grid(row=0, column=2, padx=5)
-        tb.Button(bottom_frame, text="Edit App", command=self.edit_app, bootstyle=INFO).grid(row=0, column=3, padx=5)
-        tb.Button(bottom_frame, text="Remove App", command=self.remove_app, bootstyle=DANGER).grid(row=0, column=4, padx=5)
-        tb.Button(bottom_frame, text="Trash", command=self.view_trash, bootstyle=SECONDARY).grid(row=0, column=5, padx=5)
+        widgets.SuccessButton(
+            bottom_frame, text="▶ Run All", command=self.run_apps,
+        ).grid(row=0, column=0, padx=theme.PAD_TIGHT)
+        widgets.PrimaryButton(
+            bottom_frame, text="▶ Run Selected", command=self.run_selected,
+        ).grid(row=0, column=1, padx=theme.PAD_TIGHT)
+        widgets.SecondaryButton(
+            bottom_frame, text="＋ Add App", command=self.add_app,
+        ).grid(row=0, column=2, padx=theme.PAD_TIGHT)
+        widgets.PrimaryButton(
+            bottom_frame, text="✎ Edit App", command=self.edit_app,
+        ).grid(row=0, column=3, padx=theme.PAD_TIGHT)
+        widgets.DangerButton(
+            bottom_frame, text="🗑 Remove App", command=self.remove_app,
+        ).grid(row=0, column=4, padx=theme.PAD_TIGHT)
+        widgets.SecondaryButton(
+            bottom_frame, text="🗂 Trash", command=self.view_trash,
+        ).grid(row=0, column=5, padx=theme.PAD_TIGHT)
 
-        # Separator between categories and profiles
-        tb.Separator(self, orient=HORIZONTAL).pack(fill=X, padx=10, pady=(0, 10))
+        # Divider between categories and profiles
+        widgets.Divider(self).pack(fill="x", padx=theme.PAD_NORMAL, pady=(0, theme.PAD_NORMAL))
 
         # Profiles frame: a profile = a named group of categories, run together
-        profile_frame = tb.Frame(self)
-        profile_frame.pack(fill=X, padx=10, pady=(0, 10))
+        profile_frame = ctk.CTkFrame(self, fg_color="transparent")
+        profile_frame.pack(fill="x", padx=theme.PAD_NORMAL, pady=(0, theme.PAD_NORMAL))
 
-        tb.Label(profile_frame, text="Profile:").pack(side=LEFT)
-        self.profile_var = tb.StringVar()
-        self.profile_combo = tb.Combobox(
+        widgets.FieldLabel(profile_frame, text="Profile:").pack(side="left")
+        self.profile_var = tk.StringVar()
+        self.profile_combo = widgets.PrimaryOptionMenu(
             profile_frame,
-            textvariable=self.profile_var,
-            state="readonly",
-            width=30
+            variable=self.profile_var,
+            values=[],
+            width=250,
         )
-        self.profile_combo.pack(side=LEFT, fill=X, expand=True, padx=10)
+        self.profile_combo.pack(side="left", fill="x", expand=True, padx=theme.PAD_NORMAL)
 
-        tb.Button(profile_frame, text="Run Profile", command=self.run_profile, bootstyle=PRIMARY).pack(side=LEFT, padx=5)
-        tb.Button(profile_frame, text="New", command=self.new_profile, bootstyle=SUCCESS).pack(side=LEFT, padx=5)
-        tb.Button(profile_frame, text="Edit", command=self.edit_profile, bootstyle=INFO).pack(side=LEFT, padx=5)
-        tb.Button(profile_frame, text="Rename", command=self.rename_profile, bootstyle=INFO).pack(side=LEFT, padx=5)
-        tb.Button(profile_frame, text="Delete", command=self.remove_profile, bootstyle=DANGER).pack(side=LEFT, padx=5)
+        widgets.PrimaryButton(
+            profile_frame, text="▶ Run Profile", command=self.run_profile,
+        ).pack(side="left", padx=theme.PAD_TIGHT)
+        widgets.SuccessButton(
+            profile_frame, text="＋ New", command=self.new_profile, width=95,
+        ).pack(side="left", padx=theme.PAD_TIGHT)
+        widgets.PrimaryButton(
+            profile_frame, text="✎ Edit", command=self.edit_profile, width=95,
+        ).pack(side="left", padx=theme.PAD_TIGHT)
+        widgets.PrimaryButton(
+            profile_frame, text="✎ Rename", command=self.rename_profile, width=95,
+        ).pack(side="left", padx=theme.PAD_TIGHT)
+        widgets.DangerButton(
+            profile_frame, text="🗑 Delete", command=self.remove_profile, width=95,
+        ).pack(side="left", padx=theme.PAD_TIGHT)
 
         # Status bar — also carries the current shortcut and the tray-close
         # hint, both low-priority info that doesn't need its own row.
-        status_frame = tb.Frame(self)
-        status_frame.pack(fill=X, side=BOTTOM)
+        status_frame = ctk.CTkFrame(self, fg_color="transparent")
+        status_frame.pack(fill="x", side="bottom")
 
-        self.status_var = tb.StringVar(value="Ready")
-        status_label = tb.Label(status_frame, textvariable=self.status_var, anchor=W, bootstyle=SECONDARY)
-        status_label.pack(side=LEFT, fill=X, expand=True)
+        self.status_var = tk.StringVar(value="Ready")
+        status_label = widgets.MutedLabel(status_frame, textvariable=self.status_var, anchor="w")
+        status_label.pack(side="left", fill="x", expand=True, padx=(theme.PAD_TIGHT, 0))
 
         # Created but not packed yet — it only takes up space in the status
         # bar while there's actually something to undo (see
         # _refresh_undo_button), instead of sitting there disabled at all
         # other times.
-        self.undo_button = tb.Button(
+        self.undo_button = widgets.PrimaryButton(
             status_frame,
-            text="Undo",
-            bootstyle=INFO,
-            command=self.undo_delete
+            text="↺ Undo",
+            command=self.undo_delete,
+            width=90,
         )
 
-        self.hotkey_label_var = tb.StringVar(value=f"Shortcut: {self.config_manager.get_hotkey()}")
-        self._hotkey_label = tb.Label(status_frame, textvariable=self.hotkey_label_var, bootstyle=SECONDARY)
-        self._hotkey_label.pack(side=RIGHT, padx=10)
+        self.hotkey_label_var = tk.StringVar(value=f"Shortcut: {self.config_manager.get_hotkey()}")
+        self._hotkey_label = widgets.MutedLabel(status_frame, textvariable=self.hotkey_label_var)
+        self._hotkey_label.pack(side="right", padx=theme.PAD_NORMAL)
 
         tray_note_text = "Closing this window minimizes to the tray — use File ▸ Exit or the tray menu to quit"
-        note_label = tb.Label(status_frame, text="ⓘ", bootstyle=SECONDARY, cursor="question_arrow")
-        note_label.pack(side=RIGHT, padx=(10, 0))
+        note_label = widgets.MutedLabel(status_frame, text="ⓘ", cursor="question_arrow")
+        note_label.pack(side="right", padx=(theme.PAD_NORMAL, 0))
         self._tray_note_tooltip = ToolTip(note_label)
         note_label.bind("<Enter>", lambda e: self._tray_note_tooltip.schedule(tray_note_text))
         note_label.bind("<Leave>", lambda e: self._tray_note_tooltip.hidetip())
@@ -235,13 +290,46 @@ class LauncherUI(tb.Window):
         the far right of the status bar regardless of when it's re-packed."""
         if self.last_deleted is not None:
             if not self.undo_button.winfo_ismapped():
-                self.undo_button.pack(side=RIGHT, padx=10, before=self._hotkey_label)
+                self.undo_button.pack(side="right", padx=theme.PAD_NORMAL, before=self._hotkey_label)
         else:
             self.undo_button.pack_forget()
 
+    def _require_category(self) -> bool:
+        """True if a category is selected; otherwise shows an info dialog
+        and returns False. Used as an early-return guard by every
+        category-scoped app action, so all of them give the same feedback
+        when nothing's selected instead of some silently doing nothing."""
+        if self.current_category:
+            return True
+        self.dialogs.show_info(self, "Info", "Please select a category first.")
+        return False
+
+    def _require_profile(self):
+        """Returns the selected profile's name, or None (after showing an
+        info dialog) if none is selected."""
+        name = self.profile_var.get()
+        if name:
+            return name
+        self.dialogs.show_info(self, "Info", "Please select a profile first.")
+        return None
+
+    def _selected_app(self, no_selection_message: str):
+        """Returns (index, entry) for the currently selected row in the app
+        tree, or None if nothing's selected (after showing an info dialog
+        with `no_selection_message`) or the selection is stale."""
+        sel = self.tree.selection()
+        if not sel:
+            self.dialogs.show_info(self, "Info", no_selection_message)
+            return None
+        index = self.tree.index(sel[0])
+        apps = self.config_manager.categories.get(self.current_category, [])
+        if index >= len(apps):
+            return None
+        return index, apps[index]
+
     def populate_categories(self):
         cats = list(self.config_manager.categories.keys())
-        self.category_combo["values"] = cats
+        self.category_combo.configure(values=cats)
         if not cats:
             self.category_var.set("")
             self.current_category = None
@@ -265,7 +353,7 @@ class LauncherUI(tb.Window):
             self.tree.insert("", "end", values=(entry["name"], entry["path"]))
         self.set_status(f"Loaded {len(apps)} app(s) in '{category}'")
 
-    def on_category_change(self, event=None):
+    def on_category_change(self, selected=None):
         cat = self.category_var.get()
         if cat:
             self.load_apps(cat)
@@ -281,7 +369,24 @@ class LauncherUI(tb.Window):
             return
         full_path = values[1]
         self.tooltip.schedule(full_path)
-    
+
+    @staticmethod
+    def _apps_contains_path(apps: list, path: str) -> bool:
+        """True if `apps` already has an entry with this path — used by
+        undo_delete() and restore_from_trash() to avoid creating a
+        duplicate when the same trashed item could be restored from
+        either place."""
+        return any(e["path"] == path for e in apps)
+
+    def _remove_from_trash(self, category: str, path: str):
+        """Strips the matching entry out of self.trash — called after
+        restoring it (via Undo or the Trash window) so it can't be
+        restored from there a second time."""
+        self.trash = [
+            t for t in self.trash
+            if not (t[0] == category and t[1]["path"] == path)
+        ]
+
     def undo_delete(self):
         if not self.last_deleted:
             return
@@ -293,16 +398,11 @@ class LauncherUI(tb.Window):
         # it's already there (e.g. it was already restored via the Trash
         # window before Undo was clicked), otherwise this would duplicate it.
         apps = self.config_manager.categories.get(category, [])
-        if not any(e["path"] == path for e in apps):
+        if not self._apps_contains_path(apps, path):
             apps.insert(index, entry)
             self.config_manager.save()
 
-        # Remove the matching entry from trash so it can't also be restored
-        # from there later, which would otherwise create a duplicate.
-        self.trash = [
-            t for t in self.trash
-            if not (t[0] == category and t[1]["path"] == path)
-        ]
+        self._remove_from_trash(category, path)
 
         self.load_apps(category)
         self.set_status(f"Restored: {entry['name']}")
@@ -310,7 +410,7 @@ class LauncherUI(tb.Window):
         # Clear undo buffer
         self.last_deleted = None
         self._refresh_undo_button()
-    
+
     def view_trash(self):
         if self._trash_window is not None and self._trash_window.winfo_exists():
             self._trash_window.lift()
@@ -320,31 +420,36 @@ class LauncherUI(tb.Window):
 
     # Category actions
 
-    def new_category(self):
-        name = simpledialog.askstring("New Category", "Enter new category name:", parent=self)
-        if not name:
-            return
-        if not self.config_manager.add_category(name):
-            messagebox.showinfo("Info", f"Category '{name}' already exists or is invalid.")
-            return
+    def _select_category(self, name: str):
+        """Refreshes the category list and switches the UI to `name` —
+        shared by new_category()/rename_category() since both need to show
+        the result of their change immediately rather than leaving the
+        previous category selected/displayed."""
         self.populate_categories()
         self.category_combo.set(name)
         self.load_apps(name)
+
+    def new_category(self):
+        name = self.dialogs.ask_string(self, "New Category", "Enter new category name:")
+        if not name:
+            return
+        if not self.config_manager.add_category(name):
+            self.dialogs.show_info(self, "Info", f"Category '{name}' already exists or is invalid.")
+            return
+        self._select_category(name)
         self.set_status(f"Created category '{name}'")
 
     def rename_category(self):
         old = self.category_var.get()
         if not old:
             return
-        new = simpledialog.askstring("Rename Category", f"Rename '{old}' to:", parent=self)
+        new = self.dialogs.ask_string(self, "Rename Category", f"Rename '{old}' to:")
         if not new:
             return
         if not self.config_manager.rename_category(old, new):
-            messagebox.showinfo("Info", f"Could not rename '{old}' to '{new}'.")
+            self.dialogs.show_info(self, "Info", f"Could not rename '{old}' to '{new}'.")
             return
-        self.populate_categories()
-        self.category_combo.set(new)
-        self.load_apps(new)
+        self._select_category(new)
         self.populate_profiles()  # profile category references may have been renamed
         self.set_status(f"Renamed category '{old}' to '{new}'")
 
@@ -353,12 +458,12 @@ class LauncherUI(tb.Window):
         if not cat:
             return
         if cat.strip().lower() == "default":
-            messagebox.showwarning("Not allowed", "The default category cannot be removed.")
+            self.dialogs.show_warning(self, "Not allowed", "The default category cannot be removed.")
             return
-        if not messagebox.askyesno("Confirm", f"Delete category '{cat}' and all its apps?"):
+        if not self.dialogs.ask_yes_no(self, "Confirm", f"Delete category '{cat}' and all its apps?"):
             return
         if not self.config_manager.remove_category(cat):
-            messagebox.showinfo("Info", f"Could not remove category '{cat}'.")
+            self.dialogs.show_info(self, "Info", f"Could not remove category '{cat}'.")
             return
         self.populate_categories()
         self.populate_profiles()  # profile category references may have been removed
@@ -371,8 +476,7 @@ class LauncherUI(tb.Window):
         primary path — a searchable, multi-select list of apps discovered on
         this PC — with manual file browsing available as a fallback for
         anything not listed there (portable exes, custom scripts, etc.)."""
-        if not self.current_category:
-            messagebox.showinfo("Info", "Please select a category first.")
+        if not self._require_category():
             return
 
         if not appscan.WIN32_AVAILABLE:
@@ -387,46 +491,37 @@ class LauncherUI(tb.Window):
         """The original manual file-picker flow — used as a fallback when the
         app you want isn't listed in the Start Menu scan (portable exes,
         custom scripts, etc.), or automatically when pywin32 isn't installed."""
-        if not self.current_category:
-            messagebox.showinfo("Info", "Please select a category first.")
+        if not self._require_category():
             return
 
         path = filedialog.askopenfilename(
             title="Select Application or Shortcut",
-            filetypes=[("Executables and Shortcuts", "*.exe;*.lnk"), ("All Files", "*.*")]
+            filetypes=EXECUTABLE_FILETYPES
         )
         if not path:
             return
 
         if not os.path.exists(path):
-            messagebox.showerror("Error", f"File not found:\n{path}")
+            self.dialogs.show_error(self, "Error", f"File not found:\n{path}")
             return
 
         if not self.config_manager.add_app_to_category(self.current_category, path):
-            messagebox.showinfo("Info", "This application is already in the list.")
+            self.dialogs.show_info(self, "Info", "This application is already in the list.")
             return
 
         self.load_apps(self.current_category)
         self.set_status(f"Added app to '{self.current_category}'")
 
     def remove_app(self):
-        if not self.current_category:
+        if not self._require_category():
             return
-
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("Info", "Please select an app to remove.")
+        selected = self._selected_app("Please select an app to remove.")
+        if selected is None:
             return
+        index, entry = selected
 
-        row_id = sel[0]
-        index = self.tree.index(row_id)
-        apps = self.config_manager.categories.get(self.current_category, [])
-        if index >= len(apps):
-            return
-        entry = apps[index]
-
-        confirm = messagebox.askyesno(
-            "Confirm Removal",
+        confirm = self.dialogs.ask_yes_no(
+            self, "Confirm Removal",
             f"Remove this application from '{self.current_category}'?\n\n"
             f"Name: {entry['name']}\n"
             f"Path: {entry['path']}"
@@ -443,50 +538,39 @@ class LauncherUI(tb.Window):
 
         removed = self.config_manager.remove_app_from_category(self.current_category, index)
         if removed is None:
-            messagebox.showinfo("Info", "Could not remove selected app.")
+            self.dialogs.show_info(self, "Info", "Could not remove selected app.")
             return
 
         self.load_apps(self.current_category)
         self.set_status(f"Removed: {removed['name']}")
 
     def edit_app(self):
-        if not self.current_category:
+        if not self._require_category():
             return
-
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("Info", "Please select an app to edit.")
+        selected = self._selected_app("Please select an app to edit.")
+        if selected is None:
             return
+        index, entry = selected
 
-        index = self.tree.index(sel[0])
-        apps = self.config_manager.categories.get(self.current_category, [])
-        if index >= len(apps):
-            return
-
-        EditAppDialog(self, self.current_category, index, apps[index])
+        EditAppDialog(self, self.current_category, index, entry)
 
     def run_apps(self):
-        if not self.current_category:
+        if not self._require_category():
             return
         apps = self.config_manager.categories.get(self.current_category, [])
         if not apps:
-            messagebox.showinfo("Info", "No applications to run in this category.")
+            self.dialogs.show_info(self, "Info", "No applications to run in this category.")
             return
         self.launcher.launch_list(apps)
         self.set_status(f"Launched {len(apps)} app(s) from '{self.current_category}'")
 
     def run_selected(self):
-        if not self.current_category:
+        if not self._require_category():
             return
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("Info", "Please select an app to run.")
+        selected = self._selected_app("Please select an app to run.")
+        if selected is None:
             return
-        index = self.tree.index(sel[0])
-        apps = self.config_manager.categories.get(self.current_category, [])
-        if index >= len(apps):
-            return
-        entry = apps[index]
+        index, entry = selected
         self.launcher.launch_entry(entry)
         self.set_status(f"Launched: {entry['name']}")
 
@@ -498,7 +582,7 @@ class LauncherUI(tb.Window):
         row_id = sel[0]
         cat, name, path = tree.item(row_id, "values")
 
-        confirm = messagebox.askyesno(
+        confirm = self.dialogs.ask_yes_no(self,
             "Restore Application",
             f"Restore this application?\n\n"
             f"Name: {name}\n"
@@ -519,15 +603,11 @@ class LauncherUI(tb.Window):
         # Insert back into category (skip if it's already there, e.g. it was
         # already restored via Undo)
         apps = self.config_manager.categories.get(cat, [])
-        if not any(e["path"] == path for e in apps):
+        if not self._apps_contains_path(apps, path):
             apps.append(matching_entry)
             self.config_manager.save()
 
-        # Remove from trash
-        self.trash = [
-            t for t in self.trash
-            if not (t[0] == cat and t[1]["path"] == path)
-        ]
+        self._remove_from_trash(cat, path)
 
         # If this is the item Undo would restore, clear it — it's already
         # back, so leaving Undo showing would be stale/misleading (clicking
@@ -551,7 +631,7 @@ class LauncherUI(tb.Window):
 
     def populate_profiles(self):
         profs = list(self.config_manager.profiles.keys())
-        self.profile_combo["values"] = profs
+        self.profile_combo.configure(values=profs)
         if profs:
             if self.profile_var.get() not in profs:
                 self.profile_combo.set(profs[0])
@@ -559,64 +639,71 @@ class LauncherUI(tb.Window):
             self.profile_var.set("")
 
     def run_profile(self):
-        name = self.profile_var.get()
-        if not name:
-            messagebox.showinfo("Info", "Please select a profile first.")
+        name = self._require_profile()
+        if name is None:
             return
         apps = self.config_manager.get_profile_apps(name)
         if not apps:
-            messagebox.showinfo("Info", f"Profile '{name}' has no categories with apps assigned.")
+            self.dialogs.show_info(self, "Info", f"Profile '{name}' has no categories with apps assigned.")
             return
         self.launcher.launch_list(apps)
         self.set_status(f"Launched profile '{name}' ({len(apps)} app(s))")
 
+    def _select_profile(self, name: str):
+        """Refreshes the profile list and switches the combo to `name` —
+        shared by new_profile()/rename_profile()."""
+        self.populate_profiles()
+        self.profile_combo.set(name)
+
     def new_profile(self):
-        name = simpledialog.askstring("New Profile", "Enter new profile name:", parent=self)
+        name = self.dialogs.ask_string(self, "New Profile", "Enter new profile name:")
         if not name:
             return
         if not self.config_manager.add_profile(name):
-            messagebox.showinfo("Info", f"Profile '{name}' already exists or is invalid.")
+            self.dialogs.show_info(self, "Info", f"Profile '{name}' already exists or is invalid.")
             return
-        self.populate_profiles()
-        self.profile_combo.set(name)
+        self._select_profile(name)
         self.set_status(f"Created profile '{name}'")
         # Immediately let the user pick categories for it
         self.edit_profile()
 
     def rename_profile(self):
-        old = self.profile_var.get()
-        if not old:
-            messagebox.showinfo("Info", "Please select a profile first.")
+        old = self._require_profile()
+        if old is None:
             return
-        new = simpledialog.askstring("Rename Profile", f"Rename '{old}' to:", parent=self)
+        new = self.dialogs.ask_string(self, "Rename Profile", f"Rename '{old}' to:")
         if not new:
             return
         if not self.config_manager.rename_profile(old, new):
-            messagebox.showinfo("Info", f"Could not rename '{old}' to '{new}'.")
+            self.dialogs.show_info(self, "Info", f"Could not rename '{old}' to '{new}'.")
             return
-        self.populate_profiles()
-        self.profile_combo.set(new)
+        self._select_profile(new)
         self.set_status(f"Renamed profile '{old}' to '{new}'")
 
     def remove_profile(self):
-        name = self.profile_var.get()
-        if not name:
-            messagebox.showinfo("Info", "Please select a profile first.")
+        name = self._require_profile()
+        if name is None:
             return
-        if not messagebox.askyesno("Confirm", f"Delete profile '{name}'? (Categories and apps are unaffected.)"):
+        if not self.dialogs.ask_yes_no(self, "Confirm", f"Delete profile '{name}'? (Categories and apps are unaffected.)"):
             return
         if not self.config_manager.remove_profile(name):
-            messagebox.showinfo("Info", f"Could not remove profile '{name}'.")
+            self.dialogs.show_info(self, "Info", f"Could not remove profile '{name}'.")
             return
         self.populate_profiles()
         self.set_status(f"Removed profile '{name}'")
 
     def edit_profile(self):
-        name = self.profile_var.get()
-        if not name:
-            messagebox.showinfo("Info", "Please select a profile first.")
+        name = self._require_profile()
+        if name is None:
             return
-        EditProfileDialog(self, name)
+        # Built once and reused (see edit_profile_dialog.py's module
+        # docstring for why) rather than a fresh instance per click.
+        if self._edit_profile_window is None or not self._edit_profile_window.winfo_exists():
+            self._edit_profile_window = EditProfileDialog(self)
+        self._edit_profile_window.show_profile(name)
+        self._edit_profile_window.deiconify()
+        self._edit_profile_window.lift()
+        self._edit_profile_window.focus_force()
 
     # Tray / hotkey / window lifecycle
 
@@ -634,6 +721,17 @@ class LauncherUI(tb.Window):
             return
         self._settings_window = SettingsWindow(self)
         self._settings_window.grab_set()
+
+    def set_dark_mode(self, is_dark: bool):
+        """Switches the whole app's appearance live, no restart needed. CTk
+        widgets (buttons, entries, etc.) follow theme.set_mode() on their
+        own; the Treeview is covered by that call too (see
+        apply_treeview_style), but the native menu bar needs its own
+        colors re-applied directly since restyling it requires a reference
+        to the actual Menu widgets, not just the global ttk style."""
+        theme.set_mode("dark" if is_dark else "light")
+        self._style_menu(self.menu_bar)
+        self._style_menu(self.file_menu)
 
     def _maybe_run_autostart_profile(self):
         """Launches the configured Startup Profile's apps, if one is set.
@@ -689,7 +787,7 @@ class LauncherUI(tb.Window):
         if self.config_manager.export_to(path):
             self.set_status(f"Exported config to {path}")
         else:
-            messagebox.showerror("Export Failed", f"Could not write to:\n{path}")
+            self.dialogs.show_error(self, "Export Failed", f"Could not write to:\n{path}")
 
     def import_config(self):
         path = filedialog.askopenfilename(
@@ -701,7 +799,7 @@ class LauncherUI(tb.Window):
 
         data = self.config_manager.read_import_file(path)
         if data is None:
-            messagebox.showerror(
+            self.dialogs.show_error(self,
                 "Import Failed",
                 f"'{path}' doesn't look like a valid exported config file."
             )
@@ -726,7 +824,7 @@ class LauncherUI(tb.Window):
             )
 
             if existing_name is not None:
-                choice = messagebox.askyesnocancel(
+                choice = self.dialogs.ask_yes_no_cancel(self,
                     "Category Already Exists",
                     f"Category '{existing_name}' already exists.\n\n"
                     f"Yes = merge app lists (no duplicates)\n"
@@ -741,10 +839,13 @@ class LauncherUI(tb.Window):
             else:
                 mode = "add"
 
-            self.config_manager.import_category(name, apps, mode)
+            self.config_manager.import_category(name, apps, mode, save=False)
             imported += 1
 
-        self.config_manager.import_profiles(incoming_profiles)
+        # One write for the whole import instead of one per category (plus
+        # one more for profiles) — same end state, far less disk I/O.
+        self.config_manager.import_profiles(incoming_profiles, save=False)
+        self.config_manager.save()
 
         self.populate_categories()
         self.populate_profiles()
@@ -754,4 +855,3 @@ class LauncherUI(tb.Window):
             summary += f", skipped {skipped}"
         self.set_status(summary)
         log.info("Import from %s: %d imported, %d skipped", path, imported, skipped)
-

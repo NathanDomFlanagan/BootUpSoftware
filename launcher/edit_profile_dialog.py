@@ -1,90 +1,79 @@
 """
 Edit Profile dialog — a scrollable checklist of categories to include in a
-profile. Canvas + Scrollbar is the standard Tkinter pattern for a scrollable
-region, since ttk has no native scrollable frame.
+profile. CTkScrollableFrame handles the scrolling/mousewheel plumbing
+internally, unlike plain ttk which has no scrollable-frame widget at all —
+that used to require manually wiring a Canvas + Scrollbar + mousewheel
+binding by hand (see the ttkbootstrap version of this file in git history).
+
+CustomTkinter's CTkScrollableFrame registers a handful of application-wide
+event bindings (mouse wheel, shift press/release) in its own __init__ and
+never removes them in destroy() — a bug in the library itself, not
+something fixable from here. Recreating this dialog (and therefore its
+CTkScrollableFrame) from scratch on every "Edit Profile" click would leak
+a few more stale bindings each time, for the life of the process. Instead,
+this dialog is built once and reused: ui.py keeps a single instance alive
+and calls show_profile() to repoint it at a different profile, and Save/
+Cancel/closing the window all hide it (withdraw) rather than destroy it.
 """
-import ttkbootstrap as tb
-from ttkbootstrap.constants import *
+import tkinter as tk
+
+import customtkinter as ctk
+
+import ctk_theme as theme
+import ctk_widgets as widgets
 
 
-class EditProfileDialog(tb.Toplevel):
-    def __init__(self, app, name: str):
+class EditProfileDialog(ctk.CTkToplevel):
+    def __init__(self, app):
         super().__init__(app)
         self.app = app
-        self.name = name
-
-        all_cats = list(app.config_manager.categories.keys())
-        current = set(app.config_manager.profiles.get(name, []))
-
-        self.title(f"Edit Profile: {name}")
-        self.geometry("300x400")
-
-        tb.Label(self, text=f"Select categories for '{name}':").pack(pady=(10, 5))
-
-        # Scrollable list of checkboxes — a plain Frame would just clip once
-        # there are more categories than fit in the fixed window height,
-        # with no way to reach the rest short of manually resizing the
-        # window.
-        list_container = tb.Frame(self)
-        list_container.pack(fill=BOTH, expand=True, padx=15)
-
-        canvas = tb.Canvas(list_container, highlightthickness=0)
-        canvas.pack(side=LEFT, fill=BOTH, expand=True)
-        self._canvas = canvas
-
-        list_scrollbar = tb.Scrollbar(list_container, orient="vertical", command=canvas.yview)
-        list_scrollbar.pack(side=RIGHT, fill=Y)
-        canvas.configure(yscrollcommand=list_scrollbar.set)
-
-        check_frame = tb.Frame(canvas)
-        check_frame_window = canvas.create_window((0, 0), window=check_frame, anchor="nw")
-
-        def on_check_frame_configure(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-
-        check_frame.bind("<Configure>", on_check_frame_configure)
-
-        def on_canvas_configure(event):
-            # Keep the inner frame's width matched to the canvas so it
-            # doesn't get stuck at a stale width if the window is resized.
-            canvas.itemconfigure(check_frame_window, width=event.width)
-
-        canvas.bind("<Configure>", on_canvas_configure)
-
-        def on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        # Scope the mousewheel binding to while the cursor is actually over
-        # this canvas, rather than binding it globally for the window's
-        # whole lifetime.
-        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", on_mousewheel))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
-
+        self.name = None
         self.vars_by_cat = {}
+
+        self.geometry("300x400")
+        self.protocol("WM_DELETE_WINDOW", self.withdraw)
+
+        self.title_label = widgets.FieldLabel(self, text="")
+        self.title_label.pack(pady=(theme.PAD_NORMAL, theme.PAD_TIGHT))
+
+        self.check_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.check_frame.pack(fill="both", expand=True, padx=theme.PAD_NORMAL)
+
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=theme.PAD_NORMAL)
+        widgets.SuccessButton(
+            btn_frame, text="✓ Save", command=self._save,
+        ).grid(row=0, column=0, padx=theme.PAD_TIGHT)
+        widgets.SecondaryButton(
+            btn_frame, text="Cancel", command=self.withdraw,
+        ).grid(row=0, column=1, padx=theme.PAD_TIGHT)
+
+    def show_profile(self, name: str):
+        """(Re)populates the dialog for `name` instead of building a new
+        window — see the module docstring for why. Re-reads the current
+        category list fresh each time, since categories may have been
+        added/removed since this dialog was last shown."""
+        self.name = name
+        self.title(f"Edit Profile: {name}")
+        self.title_label.configure(text=f"Select categories for '{name}':")
+
+        for widget in self.check_frame.winfo_children():
+            widget.destroy()
+        self.vars_by_cat = {}
+
+        all_cats = list(self.app.config_manager.categories.keys())
+        current = set(self.app.config_manager.profiles.get(name, []))
         for cat in all_cats:
-            var = tb.BooleanVar(value=(cat in current))
+            var = tk.BooleanVar(value=(cat in current))
             self.vars_by_cat[cat] = var
-            tb.Checkbutton(
-                check_frame, text=cat, variable=var, bootstyle="round-toggle"
-            ).pack(anchor=W, pady=2, padx=5)
+            widgets.PrimaryCheckBox(
+                self.check_frame, text=cat, variable=var,
+            ).pack(anchor="w", pady=2, padx=theme.PAD_TIGHT)
 
-        self.protocol("WM_DELETE_WINDOW", self._close)
-
-        btn_frame = tb.Frame(self)
-        btn_frame.pack(pady=10)
-        tb.Button(btn_frame, text="Save", command=self._save_and_close, bootstyle=SUCCESS).grid(row=0, column=0, padx=5)
-        tb.Button(btn_frame, text="Cancel", command=self._close, bootstyle=SECONDARY).grid(row=0, column=1, padx=5)
-
-    def _close(self):
-        # The mousewheel binding is global (bind_all) while the cursor is
-        # over the canvas — make sure it can't outlive the window.
-        self._canvas.unbind_all("<MouseWheel>")
-        self.destroy()
-
-    def _save_and_close(self):
+    def _save(self):
         selected = [c for c, v in self.vars_by_cat.items() if v.get()]
         self.app.config_manager.set_profile_categories(self.name, selected)
         self.app.set_status(
             f"Updated profile '{self.name}' ({len(selected)} categor{'y' if len(selected) == 1 else 'ies'})"
         )
-        self._close()
+        self.withdraw()

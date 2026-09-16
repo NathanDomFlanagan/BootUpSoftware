@@ -1,6 +1,8 @@
 import tkinter as tk
 import tkinter.font as tkfont
 
+import ctk_theme as theme
+
 
 class ToolTip:
     def __init__(self, widget, delay: int = 500):
@@ -29,11 +31,13 @@ class ToolTip:
         self.tipwindow = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
+        colors = theme.tooltip_colors()
         label = tk.Label(
             tw,
             text=self.text,
             justify="left",
-            background="#ffffe0",
+            background=colors["bg"],
+            foreground=colors["fg"],
             relief="solid",
             borderwidth=1,
             font=self.font
