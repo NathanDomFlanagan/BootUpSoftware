@@ -20,6 +20,7 @@ from app_picker import AppPickerWindow
 import ctk_theme as theme
 import ctk_dialogs as dialogs
 import ctk_widgets as widgets
+import applog
 import appscan
 
 log = logging.getLogger(__name__)
@@ -133,13 +134,15 @@ class LauncherUI(ctk.CTk):
 
         self.file_menu = Menu(self.menu_bar, tearoff=False)
         self._style_menu(self.file_menu)
-        self.file_menu.add_command(label="Export Config...", command=self.export_config)
-        self.file_menu.add_command(label="Import Config...", command=self.import_config)
+        self.file_menu.add_command(label="Export Config...", underline=0, command=self.export_config)
+        self.file_menu.add_command(label="Import Config...", underline=0, command=self.import_config)
         self.file_menu.add_separator()
-        self.file_menu.add_command(label="Exit", command=self.quit_app)
-        self.menu_bar.add_cascade(label="File", menu=self.file_menu)
+        self.file_menu.add_command(label="View Log...", underline=0, command=self.view_log)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Exit", underline=1, command=self.quit_app)
+        self.menu_bar.add_cascade(label="File", underline=0, menu=self.file_menu)
 
-        self.menu_bar.add_command(label="Settings...", command=self.open_settings)
+        self.menu_bar.add_command(label="Settings...", underline=0, command=self.open_settings)
 
         # Top frame: category selector
         top_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -187,6 +190,13 @@ class LauncherUI(ctk.CTk):
         self.tree.bind("<Motion>", self.on_tree_motion)
         self.tree.bind("<Leave>", lambda e: self.tooltip.hidetip())
         self.tree.bind("<Double-1>", lambda e: self.edit_app())
+
+        # Keyboard equivalents for mouse-only actions — standard list-view
+        # conventions (Explorer, etc.) so the list is usable without a mouse
+        # once it has focus (e.g. tabbed to, or clicked once to select a row).
+        self.tree.bind("<Return>", lambda e: self.edit_app())
+        self.tree.bind("<KP_Enter>", lambda e: self.edit_app())
+        self.tree.bind("<Delete>", lambda e: self.remove_app())
 
         # Scrollbar
         scrollbar = ctk.CTkScrollbar(mid_frame, orientation="vertical", command=self.tree.yview)
@@ -567,12 +577,23 @@ class LauncherUI(ctk.CTk):
     def run_selected(self):
         if not self._require_category():
             return
-        selected = self._selected_app("Please select an app to run.")
-        if selected is None:
+        sel = self.tree.selection()
+        if not sel:
+            self.dialogs.show_info(self, "Info", "Please select an app to run.")
             return
-        index, entry = selected
-        self.launcher.launch_entry(entry)
-        self.set_status(f"Launched: {entry['name']}")
+        apps = self.config_manager.categories.get(self.current_category, [])
+        # Sorted by tree position rather than selection order, which ttk
+        # doesn't guarantee matches click order — this way launch order is
+        # always top-to-bottom, matching what's visually selected.
+        indices = sorted(self.tree.index(row_id) for row_id in sel)
+        entries = [apps[i] for i in indices if i < len(apps)]
+        if not entries:
+            return
+        self.launcher.launch_list(entries)
+        if len(entries) == 1:
+            self.set_status(f"Launched: {entries[0]['name']}")
+        else:
+            self.set_status(f"Launched {len(entries)} app(s) from '{self.current_category}'")
 
     def restore_from_trash(self, tree):
         sel = tree.selection()
@@ -772,6 +793,21 @@ class LauncherUI(ctk.CTk):
         self.hotkey_manager.unregister()
         self.tray_icon.stop()
         self.after(0, self.destroy)
+
+    def view_log(self):
+        """Opens launcher.log in the OS default text viewer/editor. The log
+        (see applog.py) captures unhandled exceptions on the main thread,
+        background threads, and Tk callbacks — useful for diagnosing a
+        silent failure without needing to know the file exists or where it
+        lives, especially since the frozen build runs under pythonw.exe
+        with no console of its own to show errors in."""
+        if not applog.LOG_PATH.exists():
+            self.dialogs.show_info(self, "View Log", "No log file yet — nothing has been logged this session.")
+            return
+        try:
+            os.startfile(str(applog.LOG_PATH))  # type: ignore[attr-defined]
+        except OSError as e:
+            self.dialogs.show_error(self, "Could Not Open Log", f"Could not open the log file:\n{e}")
 
     # Export / import
 
