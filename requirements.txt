@@ -1,4 +1,4 @@
-ttkbootstrap
+customtkinter
 keyboard
 pystray
 pillow
