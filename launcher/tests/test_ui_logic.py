@@ -402,3 +402,95 @@ class TestAutostartProfile:
         ui._maybe_run_autostart_profile()
 
         ui.launcher.launch_list.assert_not_called()
+
+
+class TestRunSelected:
+    """run_selected() used to only launch the first selected row even though
+    the app tree's default ttk selectmode ("extended") allows multi-select
+    via Ctrl/Shift-click — clicking three rows and hitting Run Selected
+    silently launched just one. It now reads tree.selection() directly
+    (rather than going through _selected_app(), which is deliberately
+    single-row for remove_app()/edit_app()) and launches all of them via
+    AppLauncher.launch_list(), in top-to-bottom tree order regardless of the
+    order the rows were clicked in."""
+
+    def _make_tree(self, index_by_row):
+        tree = MagicMock()
+        tree.index.side_effect = lambda row_id: index_by_row[row_id]
+        return tree
+
+    def test_multiple_selected_launch_in_tree_order(self, tmp_path):
+        c = _make_config(tmp_path)
+        c.add_category("Gaming")
+        c.add_app_to_category("Gaming", "C:/Games/a.exe")
+        c.add_app_to_category("Gaming", "C:/Games/b.exe")
+        c.add_app_to_category("Gaming", "C:/Games/c.exe")
+
+        ui = _make_ui(c)
+        ui.current_category = "Gaming"
+        ui.launcher = MagicMock()
+        ui.tree = self._make_tree({"row0": 0, "row1": 1, "row2": 2})
+        # Selection order deliberately reversed from tree order — launch
+        # order must still be top-to-bottom.
+        ui.tree.selection.return_value = ("row2", "row0")
+
+        ui.run_selected()
+
+        apps = c.categories["Gaming"]
+        ui.launcher.launch_list.assert_called_once_with([apps[0], apps[2]])
+        ui.set_status.assert_called_once_with("Launched 2 app(s) from 'Gaming'")
+
+    def test_single_selected_keeps_original_status_message(self, tmp_path):
+        c = _make_config(tmp_path)
+        c.add_category("Gaming")
+        c.add_app_to_category("Gaming", "C:/Games/a.exe")
+
+        ui = _make_ui(c)
+        ui.current_category = "Gaming"
+        ui.launcher = MagicMock()
+        ui.tree = self._make_tree({"row0": 0})
+        ui.tree.selection.return_value = ("row0",)
+
+        ui.run_selected()
+
+        apps = c.categories["Gaming"]
+        ui.launcher.launch_list.assert_called_once_with([apps[0]])
+        ui.set_status.assert_called_once_with("Launched: a.exe")
+
+    def test_no_selection_shows_info_and_launches_nothing(self, tmp_path):
+        c = _make_config(tmp_path)
+        c.add_category("Gaming")
+        c.add_app_to_category("Gaming", "C:/Games/a.exe")
+
+        ui = _make_ui(c)
+        ui.current_category = "Gaming"
+        ui.launcher = MagicMock()
+        ui.tree = MagicMock()
+        ui.tree.selection.return_value = ()
+
+        ui.run_selected()
+
+        ui.dialogs.show_info.assert_called_once_with(ui, "Info", "Please select an app to run.")
+        ui.launcher.launch_list.assert_not_called()
+        ui.launcher.launch_entry.assert_not_called()
+        ui.set_status.assert_not_called()
+
+    def test_stale_row_filtered_out_without_error(self, tmp_path):
+        """A selected row whose tree index no longer maps to a real app is
+        skipped rather than raising an IndexError — matching
+        _selected_app()'s existing `index >= len(apps)` guard."""
+        c = _make_config(tmp_path)
+        c.add_category("Gaming")
+        c.add_app_to_category("Gaming", "C:/Games/a.exe")
+
+        ui = _make_ui(c)
+        ui.current_category = "Gaming"
+        ui.launcher = MagicMock()
+        ui.tree = self._make_tree({"row0": 0, "stale": 5})
+        ui.tree.selection.return_value = ("stale", "row0")
+
+        ui.run_selected()
+
+        apps = c.categories["Gaming"]
+        ui.launcher.launch_list.assert_called_once_with([apps[0]])
+        ui.set_status.assert_called_once_with("Launched: a.exe")
