@@ -16,6 +16,8 @@ import threading
 from PIL import Image, ImageDraw
 import pystray
 
+from safe_call import safe_call
+
 log = logging.getLogger(__name__)
 
 try:
@@ -54,23 +56,20 @@ class TrayIcon:
             self._build_image(is_light=self._is_light),
             app_name,
             menu=pystray.Menu(
-                pystray.MenuItem("Show", lambda icon, item: self._safe(on_show, "Show"), default=True),
-                pystray.MenuItem("Exit", lambda icon, item: self._safe(on_exit, "Exit")),
+                pystray.MenuItem(
+                    "Show",
+                    lambda icon, item: safe_call(log, "Error handling tray menu action 'Show'", on_show),
+                    default=True,
+                ),
+                pystray.MenuItem(
+                    "Exit",
+                    lambda icon, item: safe_call(log, "Error handling tray menu action 'Exit'", on_exit),
+                ),
             ),
         )
         self._thread = None
         self._theme_thread = None
         self._stop_event = threading.Event()
-
-    @staticmethod
-    def _safe(callback, label: str):
-        # Tray menu callbacks fire on pystray's own thread. An unhandled
-        # exception here could kill that thread — leaving the tray icon
-        # unresponsive with no visible error. Catch and log instead.
-        try:
-            callback()
-        except Exception:
-            log.exception("Error handling tray menu action '%s'", label)
 
     @staticmethod
     def _build_image(size: int = 64, is_light: bool = False) -> Image.Image:

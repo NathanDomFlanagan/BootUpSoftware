@@ -40,6 +40,11 @@ def _make_ui(config_manager):
     ui.populate_profiles = MagicMock()
     ui._settings_window = None
     ui._trash_window = None
+    # A fake dialogs object per instance, same as the real self.dialogs =
+    # dialogs assignment in __init__ — tests configure return values
+    # directly on it (e.g. ui.dialogs.ask_yes_no.return_value = True)
+    # instead of patching ctk_dialogs by name.
+    ui.dialogs = MagicMock()
     return ui
 
 
@@ -56,9 +61,17 @@ class FakeVar:
         self._value = value
 
 
-class FakeCombo(dict):
-    """Minimal stand-in for a ttk Combobox: supports `combo["values"] = ...`
+class FakeCombo:
+    """Minimal stand-in for a CTkOptionMenu: supports `.configure(values=...)`
     and `.set(...)`, without needing a real Tk root."""
+    def __init__(self):
+        self.values = []
+        self.current_text = None
+
+    def configure(self, values=None, **kwargs):
+        if values is not None:
+            self.values = values
+
     def set(self, value):
         self.current_text = value
 
@@ -66,7 +79,10 @@ class FakeCombo(dict):
 def _entry(path, name=None):
     """Builds an app entry dict matching config.py's normalize_app_entry
     shape, for tests that need to construct one directly."""
-    return {"path": path, "name": name or Path(path).name, "args": "", "working_dir": ""}
+    return {
+        "path": path, "name": name or Path(path).name, "args": "", "working_dir": "",
+        "type": "uwp" if path.lower().startswith("shell:") else "path",
+    }
 
 
 class TestUndoTrashSync:
@@ -110,8 +126,8 @@ class TestUndoTrashSync:
         tree.selection.return_value = [row_id]
         tree.item.return_value = ("Gaming", "game.exe", "C:/Games/game.exe")
 
-        with patch("ui.messagebox.askyesno", return_value=True):
-            ui.restore_from_trash(tree)
+        ui.dialogs.ask_yes_no.return_value = True
+        ui.restore_from_trash(tree)
 
         matching = [e for e in c.categories["Gaming"] if e["path"] == "C:/Games/game.exe"]
         assert len(matching) == 1
@@ -136,8 +152,8 @@ class TestUndoTrashSync:
         tree.selection.return_value = [row_id]
         tree.item.return_value = ("Gaming", "game.exe", "C:/Games/game.exe")
 
-        with patch("ui.messagebox.askyesno", return_value=True):
-            ui.restore_from_trash(tree)
+        ui.dialogs.ask_yes_no.return_value = True
+        ui.restore_from_trash(tree)
         matching = [e for e in c.categories["Gaming"] if e["path"] == "C:/Games/game.exe"]
         assert len(matching) == 1
 
@@ -176,8 +192,8 @@ class TestUndoButtonClearedByTrashRestore:
         tree.selection.return_value = [row_id]
         tree.item.return_value = ("Gaming", "game.exe", "C:/Games/game.exe")
 
-        with patch("ui.messagebox.askyesno", return_value=True):
-            ui.restore_from_trash(tree)
+        ui.dialogs.ask_yes_no.return_value = True
+        ui.restore_from_trash(tree)
 
         assert ui.last_deleted is None
         ui.undo_button.pack_forget.assert_called_once()
@@ -204,8 +220,8 @@ class TestUndoButtonClearedByTrashRestore:
         tree.selection.return_value = [row_id]
         tree.item.return_value = ("Gaming", "unrelated.exe", "C:/Games/unrelated.exe")
 
-        with patch("ui.messagebox.askyesno", return_value=True):
-            ui.restore_from_trash(tree)
+        ui.dialogs.ask_yes_no.return_value = True
+        ui.restore_from_trash(tree)
 
         assert ui.last_deleted == ("Gaming", 0, other_entry)
         ui.undo_button.pack_forget.assert_not_called()
@@ -225,8 +241,8 @@ class TestImportCaseInsensitiveMerge:
         import json
         import_path.write_text(json.dumps(import_data))
 
-        with patch("ui.filedialog.askopenfilename", return_value=str(import_path)), \
-             patch("ui.messagebox.askyesnocancel", return_value=True):  # "Yes" = merge
+        ui.dialogs.ask_yes_no_cancel.return_value = True  # "Yes" = merge
+        with patch("ui.filedialog.askopenfilename", return_value=str(import_path)):
             ui.import_config()
 
         # Merged into the existing "Gaming" category, no separate "gaming" created.

@@ -13,6 +13,8 @@ rather than touching widgets directly inside the callback.
 import logging
 import keyboard
 
+from safe_call import safe_call
+
 log = logging.getLogger(__name__)
 
 
@@ -29,18 +31,8 @@ class HotkeyManager:
         if not combo:
             return False
 
-        def _safe_callback():
-            # The hotkey fires on keyboard's own listener thread. If `callback`
-            # raises here, an unhandled exception could kill that thread —
-            # silently disabling the hotkey with no visible error. Catch and
-            # log instead so the listener keeps running.
-            try:
-                callback()
-            except Exception:
-                log.exception("Error handling hotkey '%s'", combo)
-
         try:
-            keyboard.add_hotkey(combo, _safe_callback)
+            keyboard.add_hotkey(combo, lambda: safe_call(log, f"Error handling hotkey '{combo}'", callback))
             self._current_combo = combo
             log.info("Registered hotkey '%s'", combo)
             return True

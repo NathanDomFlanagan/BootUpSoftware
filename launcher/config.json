@@ -5,13 +5,22 @@
                 "path": "C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe",
                 "name": "brave.exe",
                 "args": "",
-                "working_dir": ""
+                "working_dir": "",
+                "type": "path"
             },
             {
                 "path": "C:\\Users\\Nathan\\AppData\\Local\\Discord\\app-1.0.9257\\Discord.exe",
                 "name": "Discord",
                 "args": "",
-                "working_dir": ""
+                "working_dir": "",
+                "type": "path"
+            },
+            {
+                "path": "C:\\Users\\Nathan\\AppData\\Local\\Programs\\Joplin\\Joplin.exe",
+                "name": "Joplin",
+                "args": "",
+                "working_dir": "",
+                "type": "path"
             }
         ],
         "Gaming": [
@@ -19,7 +28,8 @@
                 "path": "C:/Program Files (x86)/Steam/steam.exe",
                 "name": "steam.exe",
                 "args": "",
-                "working_dir": ""
+                "working_dir": "",
+                "type": "path"
             }
         ],
         "Coding": [
@@ -27,13 +37,15 @@
                 "path": "C:/Users/Nathan/AppData/Local/Programs/VSCodium/VSCodium.exe",
                 "name": "VSCodium.exe",
                 "args": "",
-                "working_dir": ""
+                "working_dir": "",
+                "type": "path"
             },
             {
                 "path": "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude",
                 "name": "Claude",
                 "args": "",
-                "working_dir": ""
+                "working_dir": "",
+                "type": "uwp"
             }
         ]
     },
@@ -48,5 +60,6 @@
         "hotkey": "ctrl+alt+l",
         "start_minimized": false,
         "autostart_profile": "Usual"
-    }
+    },
+    "schema_version": 2
 }
