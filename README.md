@@ -1,6 +1,6 @@
 # App Launcher
 
-A lightweight Windows desktop app for launching groups of programs with a single click — built with Python and [ttkbootstrap](https://ttkbootstrap.readthedocs.io/).
+A lightweight Windows desktop app for launching groups of programs with a single click — built with Python and [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter).
 
 Instead of manually opening five apps every time you sit down to game, code, or study, you organize them into **categories** (e.g. "Gaming", "Programming") and optionally combine categories into **profiles** (e.g. a "School" profile that launches your Programming *and* Default apps together).
 
@@ -26,7 +26,8 @@ To run from source instead, see [Requirements](#requirements) and [Running it](#
 - **Run at Startup** — launches automatically at login via a registry entry (`HKCU\...\CurrentVersion\Run`), with automatic detection and one-click repair if the entry goes stale (e.g. after moving the project folder)
 - **Startup Profile** — automatically launch a chosen profile's apps when the app starts at login (not on a manual open), so your usual set of apps is running by the time you sit down
 - **Export / Import config** — back up or share your categories and profiles as a standalone JSON file
-- **Dark theme UI** via ttkbootstrap
+- **View Log** — open the app's log file directly from the menu bar (**File → View Log...**) for diagnosing a silent failure, without needing to know the file exists or where it lives
+- **Light / Dark mode** — toggle in **Settings...**, switches the whole app's appearance live with no restart needed, and is remembered across sessions
 
 ## Requirements
 
@@ -70,6 +71,10 @@ On first run, if no `config.json` exists next to the script, one is created auto
 | `paths.py` | Shared helper for resolving paths whether running from source or frozen as a PyInstaller exe |
 | `applog.py` | Centralized rotating-file logging setup, including uncaught-exception handlers |
 | `tooltip.py` | Small reusable `ToolTip` widget used for showing full file paths on hover |
+| `ctk_theme.py` | Shared CustomTkinter theming — colors, corner radius, spacing scale, fonts, and the light/dark mode machinery |
+| `ctk_widgets.py` | Themed button/entry/label/etc. subclasses with the app's styling baked in, so it isn't repeated at every call site |
+| `ctk_dialogs.py` | CTk-styled replacements for `tkinter.messagebox`/`simpledialog`, so confirmation/error/input popups match the rest of the app instead of looking like plain OS dialogs |
+| `safe_call.py` | Small shared helper for safely running a background-thread callback without an unhandled exception silently killing that thread |
 | `config.json` | Your saved categories, apps, and profiles — created automatically, safe to back up |
 | `tests/` | Pytest suite covering `config.py`, `appscan.py`, `startup.py`, `launcher.py`, and the undo/trash/import fixes in `ui.py` |
 
@@ -79,16 +84,17 @@ On first run, if no `config.json` exists next to the script, one is created auto
 
 ```json
 {
+    "schema_version": 2,
     "categories": {
         "Default": [
-            {"path": "C:/path/to/discord.lnk", "name": "Discord", "args": "", "working_dir": ""},
-            {"path": "C:/path/to/brave.exe", "name": "Brave", "args": "", "working_dir": ""}
+            {"path": "C:/path/to/discord.lnk", "name": "Discord", "args": "", "working_dir": "", "type": "path"},
+            {"path": "C:/path/to/brave.exe", "name": "Brave", "args": "", "working_dir": "", "type": "path"}
         ],
         "Gaming": [
-            {"path": "C:/path/to/steam.exe", "name": "Steam", "args": "", "working_dir": ""}
+            {"path": "C:/path/to/steam.exe", "name": "Steam", "args": "", "working_dir": "", "type": "path"}
         ],
         "Programming": [
-            {"path": "shell:AppsFolder\\Microsoft.VisualStudioCode_xxx!App", "name": "VS Code", "args": "", "working_dir": ""}
+            {"path": "shell:AppsFolder\\Microsoft.VisualStudioCode_xxx!App", "name": "VS Code", "args": "", "working_dir": "", "type": "uwp"}
         ]
     },
     "profiles": {
@@ -98,16 +104,18 @@ On first run, if no `config.json` exists next to the script, one is created auto
     "settings": {
         "hotkey": "ctrl+alt+l",
         "start_minimized": true,
-        "autostart_profile": ""
+        "autostart_profile": "",
+        "dark_mode": true
     }
 }
 ```
 
-- **`categories`** — each key is a category name, each value is a list of app entries in that category. Each entry has a `path` (a normal file path for a `.exe`/`.lnk`, or a `shell:AppsFolder\...` pseudo-path identifying a UWP/Store app), a display `name`, and optional `args`/`working_dir` (set via **Edit App**).
+- **`schema_version`** — bumped whenever this on-disk shape changes, so an older file can be upgraded with a direct version check instead of guessing its age from what's present or absent. Missing entirely just means the file predates this field.
+- **`categories`** — each key is a category name, each value is a list of app entries in that category. Each entry has a `path` (a normal file path for a `.exe`/`.lnk`, or a `shell:AppsFolder\...` pseudo-path identifying a UWP/Store app), a display `name`, a `type` (`"path"` or `"uwp"`, matching which kind of `path` it is), and optional `args`/`working_dir` (set via **Edit App**).
 - **`profiles`** — each key is a profile name, each value is a list of *category names* to launch together. Running a profile flattens every app across those categories into one de-duplicated launch list.
-- **`settings`** — machine-specific preferences: the global hotkey, whether startup launches go straight to the tray, and which profile (if any) auto-launches at login.
+- **`settings`** — machine-specific preferences: the global hotkey, whether startup launches go straight to the tray, which profile (if any) auto-launches at login, and whether the UI is in dark or light mode.
 
-If you have an older `config.json` from a previous version (either the original flat format with no `categories` wrapper, or one where each app was just a bare path string instead of the object shown above), it's automatically detected and migrated to the current format the first time you run the app — no manual conversion needed.
+If you have an older `config.json` from a previous version (the original flat format with no `categories` wrapper, one where each app was a bare path string instead of the object shown above, or one predating the `type`/`schema_version` fields), it's automatically detected and migrated to the current format the first time you run the app — no manual conversion needed.
 
 ## Using categories and profiles
 
@@ -128,7 +136,7 @@ Use **Edit** on an existing profile any time to change which categories it inclu
 
 Open **Settings...** from the menu bar for:
 
-- **General tab** — change the global shortcut that brings the window back from the tray; toggle **Run at Startup** (adds/removes a `HKCU\...\CurrentVersion\Run` registry entry, no admin rights needed); toggle **Start Minimized** for whether startup launches should skip straight to the tray; pick a **Startup Profile** to auto-launch its apps when the app starts at login (not on a manual open). If the startup entry goes stale — e.g. you moved or re-cloned the project folder — a **Repair Startup Entry** button appears automatically.
+- **General tab** — toggle **Dark Mode** for the whole app's appearance (applies immediately, remembered next time you open it); change the global shortcut that brings the window back from the tray; toggle **Run at Startup** (adds/removes a `HKCU\...\CurrentVersion\Run` registry entry, no admin rights needed); toggle **Start Minimized** for whether startup launches should skip straight to the tray; pick a **Startup Profile** to auto-launch its apps when the app starts at login (not on a manual open). If the startup entry goes stale — e.g. you moved or re-cloned the project folder — a **Repair Startup Entry** button appears automatically.
 - **Backup tab** — export your categories/profiles to a JSON file, or import one (with merge/replace/skip choices per category on conflict).
 
 ## Notes / known limitations
