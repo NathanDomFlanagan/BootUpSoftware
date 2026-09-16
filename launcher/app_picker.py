@@ -10,18 +10,25 @@ machine with a large Start Menu, and running it on the main thread would
 freeze the whole window while it works. Results are marshalled back via
 `self.after(0, ...)`, the same pattern already used for the tray icon and
 global hotkey callbacks (see tray.py/hotkey.py).
+
+The list itself stays a plain ttk.Treeview (styled to match the current
+light/dark mode via ctk_theme) since CustomTkinter has no equivalent
+widget; everything else here is CustomTkinter.
 """
 import threading
+import tkinter as tk
+import tkinter.ttk as ttk
 
-import ttkbootstrap as tb
-from ttkbootstrap.constants import *
-from tkinter import messagebox
+import customtkinter as ctk
 
 from tooltip import ToolTip
+import ctk_theme as theme
+import ctk_dialogs as dialogs
+import ctk_widgets as widgets
 import appscan
 
 
-class AppPickerWindow(tb.Toplevel):
+class AppPickerWindow(ctk.CTkToplevel):
     def __init__(self, app, category: str):
         super().__init__(app)
         self.app = app
@@ -33,41 +40,44 @@ class AppPickerWindow(tb.Toplevel):
         self.title("Add App")
         self.geometry("760x480")
 
-        tb.Label(self, text=f"Adding to: {category} — select one or more").pack(pady=(10, 0))
+        theme.apply_treeview_style()
 
-        search_row = tb.Frame(self)
-        search_row.pack(fill=X, padx=15, pady=10)
+        widgets.FieldLabel(
+            self, text=f"Adding to: {category} — select one or more",
+        ).pack(pady=(theme.PAD_NORMAL, 0))
 
-        self.search_var = tb.StringVar()
-        search_entry = tb.Entry(search_row, textvariable=self.search_var)
-        search_entry.pack(side=LEFT, fill=X, expand=True)
+        search_row = ctk.CTkFrame(self, fg_color="transparent")
+        search_row.pack(fill="x", padx=theme.PAD_NORMAL, pady=theme.PAD_NORMAL)
+
+        self.search_var = tk.StringVar()
+        search_entry = widgets.ThemedEntry(search_row, textvariable=self.search_var)
+        search_entry.pack(side="left", fill="x", expand=True)
         search_entry.focus_set()
         self.search_var.trace_add("write", lambda *a: self._populate(self.search_var.get()))
 
-        self.refresh_button = tb.Button(
-            search_row, text="⟳ Refresh", command=lambda: self._start_scan(refresh=True), bootstyle=SECONDARY
+        self.refresh_button = widgets.SecondaryButton(
+            search_row, text="⟳ Refresh", command=lambda: self._start_scan(refresh=True), width=90,
         )
-        self.refresh_button.pack(side=LEFT, padx=(8, 0))
+        self.refresh_button.pack(side="left", padx=(theme.PAD_TIGHT, 0))
 
-        list_frame = tb.Frame(self)
-        list_frame.pack(fill=BOTH, expand=True, padx=15)
+        list_frame = ctk.CTkFrame(self, fg_color="transparent")
+        list_frame.pack(fill="both", expand=True, padx=theme.PAD_NORMAL)
 
         # Shows both name and path — a name-only list can't distinguish two
         # shortcuts that share a display name but point at different exes
         # (e.g. two installed versions, or the same app in two Start Menu
         # folders), so there's no way to tell which one you're picking.
-        self.tree = tb.Treeview(
-            list_frame, columns=("name", "path"), show="headings",
-            selectmode="extended", bootstyle=INFO
+        self.tree = ttk.Treeview(
+            list_frame, columns=("name", "path"), show="headings", selectmode="extended"
         )
         self.tree.heading("name", text="Name")
         self.tree.heading("path", text="Path")
-        self.tree.column("name", width=220, anchor=W)
-        self.tree.column("path", width=460, anchor=W)
-        self.tree.pack(fill=BOTH, expand=True, side=LEFT)
+        self.tree.column("name", width=220, anchor="w")
+        self.tree.column("path", width=460, anchor="w")
+        self.tree.pack(fill="both", expand=True, side="left")
 
-        scrollbar = tb.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
-        scrollbar.pack(side=RIGHT, fill=Y)
+        scrollbar = ctk.CTkScrollbar(list_frame, orientation="vertical", command=self.tree.yview)
+        scrollbar.pack(side="right", fill="y")
         self.tree.configure(yscrollcommand=scrollbar.set)
 
         # Tooltip for the full path, same pattern as the main app list.
@@ -75,14 +85,20 @@ class AppPickerWindow(tb.Toplevel):
         self.tree.bind("<Motion>", self._on_tree_motion)
         self.tree.bind("<Leave>", lambda e: self._tooltip.hidetip())
 
-        self.status_var = tb.StringVar(value="Scanning for apps...")
-        tb.Label(self, textvariable=self.status_var, bootstyle=SECONDARY).pack(pady=(5, 0))
+        self.status_var = tk.StringVar(value="Scanning for apps...")
+        widgets.MutedLabel(self, textvariable=self.status_var).pack(pady=(theme.PAD_TIGHT, 0))
 
-        btn_frame = tb.Frame(self)
-        btn_frame.pack(pady=10)
-        tb.Button(btn_frame, text="Add Selected", command=self._add_selected, bootstyle=SUCCESS).grid(row=0, column=0, padx=5)
-        tb.Button(btn_frame, text="Browse Manually...", command=self._browse_manually, bootstyle=SECONDARY).grid(row=0, column=1, padx=5)
-        tb.Button(btn_frame, text="Cancel", command=self.destroy, bootstyle=SECONDARY).grid(row=0, column=2, padx=5)
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=theme.PAD_NORMAL)
+        widgets.SuccessButton(
+            btn_frame, text="✓ Add Selected", command=self._add_selected,
+        ).grid(row=0, column=0, padx=theme.PAD_TIGHT)
+        widgets.SecondaryButton(
+            btn_frame, text="📁 Browse Manually...", command=self._browse_manually,
+        ).grid(row=0, column=1, padx=theme.PAD_TIGHT)
+        widgets.SecondaryButton(
+            btn_frame, text="Cancel", command=self.destroy,
+        ).grid(row=0, column=2, padx=theme.PAD_TIGHT)
 
         self._start_scan(refresh=False)
 
@@ -137,7 +153,7 @@ class AppPickerWindow(tb.Toplevel):
     def _add_selected(self):
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("Info", "Select at least one app to add.")
+            dialogs.show_info(self, "Info", "Select at least one app to add.")
             return
         added = 0
         skipped = 0
