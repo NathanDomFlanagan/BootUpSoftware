@@ -82,6 +82,14 @@ class AppEntry:
         self.shortcut_path = shortcut_path
 
 
+def _sort_by_name(entries: list) -> list:
+    """In-place, case-insensitive sort by display name — shared by both
+    scan functions so results from either source (or a future one) list in
+    the same order."""
+    entries.sort(key=lambda e: e.name.lower())
+    return entries
+
+
 def scan_start_menu(refresh: bool = False):
     """Returns (entries, skipped_count):
       - entries: a sorted list of AppEntry for genuine, resolvable
@@ -151,7 +159,7 @@ def scan_start_menu(refresh: bool = False):
                 seen_targets.add(target)
                 results.append(AppEntry(name=name, target=target, shortcut_path=str(lnk_path)))
 
-        results.sort(key=lambda e: e.name.lower())
+        _sort_by_name(results)
         log.info(
             "Start Menu/Desktop scan found %d candidate app(s), %d shortcut(s) unresolved",
             len(results), skipped
@@ -231,7 +239,7 @@ def scan_uwp_apps(refresh: bool = False):
             continue
         results.append(AppEntry(name=name, target=f"shell:AppsFolder\\{app_id}", shortcut_path=""))
 
-    results.sort(key=lambda e: e.name.lower())
+    _sort_by_name(results)
     log.info("UWP scan found %d app(s)", len(results))
     _uwp_cache = results
     return _uwp_cache

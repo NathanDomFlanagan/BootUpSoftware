@@ -33,7 +33,7 @@ class TestPlainLaunch:
         entry = {"path": str(tmp_path / "gone.exe"), "name": "gone.exe", "args": "", "working_dir": ""}
 
         with patch("launcher.os.startfile") as mock_startfile, \
-             patch("launcher.messagebox.showerror") as mock_error:
+             patch("launcher.dialogs.show_error") as mock_error:
             AppLauncher().launch_entry(entry)
 
         mock_startfile.assert_not_called()
@@ -76,20 +76,24 @@ class TestUwpLaunch:
             "name": "Calculator",
             "args": "",
             "working_dir": "",
+            "type": "uwp",
         }
 
         with patch("launcher.os.startfile") as mock_startfile, \
-             patch("launcher.messagebox.showerror") as mock_error:
+             patch("launcher.dialogs.show_error") as mock_error:
             AppLauncher().launch_entry(entry)
 
         mock_startfile.assert_called_once_with(entry["path"])
         mock_error.assert_not_called()
 
     def test_shell_launch_failure_shows_error(self):
-        entry = {"path": "shell:AppsFolder\\Broken!App", "name": "Broken App", "args": "", "working_dir": ""}
+        entry = {
+            "path": "shell:AppsFolder\\Broken!App", "name": "Broken App", "args": "", "working_dir": "",
+            "type": "uwp",
+        }
 
         with patch("launcher.os.startfile", side_effect=OSError("boom")), \
-             patch("launcher.messagebox.showerror") as mock_error:
+             patch("launcher.dialogs.show_error") as mock_error:
             AppLauncher().launch_entry(entry)
 
         mock_error.assert_called_once()
