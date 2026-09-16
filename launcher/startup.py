@@ -70,18 +70,26 @@ class StartupManager:
     def is_available(self) -> bool:
         return WINREG_AVAILABLE
 
+    @staticmethod
+    def _read_registry_value():
+        """Reads the current registry value, or None if winreg isn't
+        available or the key/value doesn't exist. Shared by is_enabled()
+        (which only cares whether it exists) and is_up_to_date() (which
+        needs the actual value to compare against what we'd create now)."""
+        if not WINREG_AVAILABLE:
+            return None
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_RUN_KEY)
+            value, _ = winreg.QueryValueEx(key, REGISTRY_VALUE_NAME)
+            winreg.CloseKey(key)
+            return value
+        except OSError:
+            return None
+
     def is_enabled(self) -> bool:
         """Source of truth is the registry — always reflects reality, never
         a cached/stale value."""
-        if not WINREG_AVAILABLE:
-            return False
-        try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_RUN_KEY)
-            winreg.QueryValueEx(key, REGISTRY_VALUE_NAME)
-            winreg.CloseKey(key)
-            return True
-        except OSError:
-            return False
+        return self._read_registry_value() is not None
 
     def is_up_to_date(self) -> bool:
         """True if no entry is registered (nothing to repair), or the
@@ -91,11 +99,8 @@ class StartupManager:
         was reinstalled to a new location."""
         if not WINREG_AVAILABLE:
             return True
-        try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_RUN_KEY)
-            value, _ = winreg.QueryValueEx(key, REGISTRY_VALUE_NAME)
-            winreg.CloseKey(key)
-        except OSError:
+        value = self._read_registry_value()
+        if value is None:
             return True  # nothing registered — nothing to repair
 
         if not _files_exist():

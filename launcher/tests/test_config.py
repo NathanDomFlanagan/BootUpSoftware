@@ -115,6 +115,7 @@ class TestUpdateApp:
         assert entry == {
             "path": "C:/chrome.exe", "name": "Gmail",
             "args": "--app=https://mail.google.com/mail/", "working_dir": "C:/",
+            "type": "path",
         }
 
     def test_can_change_the_path_itself(self, tmp_path):
@@ -251,7 +252,10 @@ class TestCorruptConfigRecovery:
         c.load()
 
         entry = c.categories["Gaming"][0]
-        assert entry == {"path": "C:/Games/steam.exe", "name": "steam.exe", "args": "", "working_dir": ""}
+        assert entry == {
+            "path": "C:/Games/steam.exe", "name": "steam.exe", "args": "", "working_dir": "",
+            "type": "path",
+        }
 
         # The migration should have been persisted, not just held in memory.
         on_disk = json.loads(path.read_text())
