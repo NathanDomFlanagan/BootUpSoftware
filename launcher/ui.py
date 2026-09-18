@@ -2,10 +2,8 @@ import logging
 import os
 import tkinter as tk
 import tkinter.ttk as ttk
-
 import customtkinter as ctk
 from tkinter import filedialog, Menu
-
 from config import Config
 from launcher import AppLauncher, EXECUTABLE_FILETYPES
 from tooltip import ToolTip
@@ -22,6 +20,10 @@ import ctk_dialogs as dialogs
 import ctk_widgets as widgets
 import applog
 import appscan
+
+CONFIRM_LAUNCH_THRESHOLD = 5  # categories/profiles at or above this size get
+                               # a confirm dialog before Run All/Run Profile
+                               # launch them; below it, launching stays one-click.
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +68,7 @@ class LauncherUI(ctk.CTk):
         self.minsize(min_width, min_height)
         self.geometry(f"{min_width}x{max(min_height, 560)}")
 
-        self.last_deleted = None  # (category, index, entry)
+        self.undo_stack = []  # list of (category, index, entry), most recent last
         self.trash = []  # list of (original_category, entry)
         self._refresh_undo_button()
 
@@ -297,8 +299,12 @@ class LauncherUI(ctk.CTk):
         """Shows the Undo button only while there's actually something to
         undo, rather than leaving it disabled-but-visible in the status bar
         the rest of the time. `before=self._hotkey_label` keeps it pinned to
-        the far right of the status bar regardless of when it's re-packed."""
-        if self.last_deleted is not None:
+        the far right of the status bar regardless of when it's re-packed.
+        Labels the button with the pending-undo count once there's more
+        than one, so it's clear multiple levels are available."""
+        if self.undo_stack:
+            depth = len(self.undo_stack)
+            self.undo_button.configure(text=f"↺ Undo ({depth})" if depth > 1 else "↺ Undo")
             if not self.undo_button.winfo_ismapped():
                 self.undo_button.pack(side="right", padx=theme.PAD_NORMAL, before=self._hotkey_label)
         else:
@@ -398,10 +404,10 @@ class LauncherUI(ctk.CTk):
         ]
 
     def undo_delete(self):
-        if not self.last_deleted:
+        if not self.undo_stack:
             return
 
-        category, index, entry = self.last_deleted
+        category, index, entry = self.undo_stack.pop()
         path = entry["path"]
 
         # Insert back into the list at the original index — but skip if
@@ -416,9 +422,6 @@ class LauncherUI(ctk.CTk):
 
         self.load_apps(category)
         self.set_status(f"Restored: {entry['name']}")
-
-        # Clear undo buffer
-        self.last_deleted = None
         self._refresh_undo_button()
 
     def view_trash(self):
@@ -540,7 +543,7 @@ class LauncherUI(ctk.CTk):
             return
 
         # store for undo
-        self.last_deleted = (self.current_category, index, entry)
+        self.undo_stack.append((self.current_category, index, entry))
         self._refresh_undo_button()
 
         # add to trash
@@ -571,6 +574,12 @@ class LauncherUI(ctk.CTk):
         if not apps:
             self.dialogs.show_info(self, "Info", "No applications to run in this category.")
             return
+        if len(apps) >= CONFIRM_LAUNCH_THRESHOLD:
+            if not self.dialogs.ask_yes_no(
+                self, "Confirm Launch",
+                f"Launch {len(apps)} apps in '{self.current_category}'?"
+            ):
+                return
         self.launcher.launch_list(apps)
         self.set_status(f"Launched {len(apps)} app(s) from '{self.current_category}'")
 
@@ -630,13 +639,17 @@ class LauncherUI(ctk.CTk):
 
         self._remove_from_trash(cat, path)
 
-        # If this is the item Undo would restore, clear it — it's already
-        # back, so leaving Undo showing would be stale/misleading (clicking
-        # it wouldn't do anything now that the duplicate-guard is in place,
-        # but it shouldn't still look actionable).
-        if self.last_deleted is not None and self.last_deleted[0] == cat \
-                and self.last_deleted[2]["path"] == path:
-            self.last_deleted = None
+        # If this item is still sitting in the undo stack, drop it — it's
+        # already back, so leaving it undoable would be stale/misleading
+        # (clicking Undo wouldn't do anything now that the duplicate-guard
+        # is in place, but it shouldn't still look actionable), and could
+        # otherwise shift which earlier removal a later Undo click restores.
+        before = len(self.undo_stack)
+        self.undo_stack = [
+            (c, i, e) for (c, i, e) in self.undo_stack
+            if not (c == cat and e["path"] == path)
+        ]
+        if len(self.undo_stack) != before:
             self._refresh_undo_button()
 
         # Update trash window
@@ -667,6 +680,12 @@ class LauncherUI(ctk.CTk):
         if not apps:
             self.dialogs.show_info(self, "Info", f"Profile '{name}' has no categories with apps assigned.")
             return
+        if len(apps) >= CONFIRM_LAUNCH_THRESHOLD:
+            if not self.dialogs.ask_yes_no(
+                self, "Confirm Launch",
+                f"Launch {len(apps)} apps in profile '{name}'?"
+            ):
+                return
         self.launcher.launch_list(apps)
         self.set_status(f"Launched profile '{name}' ({len(apps)} app(s))")
 
