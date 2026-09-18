@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import Config
-from ui import LauncherUI
+from ui import LauncherUI, CONFIRM_LAUNCH_THRESHOLD
 
 
 def _make_config(tmp_path):
@@ -31,7 +31,7 @@ def _make_ui(config_manager):
     ui = LauncherUI.__new__(LauncherUI)
     ui.config_manager = config_manager
     ui.current_category = None
-    ui.last_deleted = None
+    ui.undo_stack = []
     ui.trash = []
     ui.undo_button = MagicMock()
     ui.load_apps = MagicMock()
@@ -94,7 +94,7 @@ class TestUndoTrashSync:
         ui = _make_ui(c)
         ui.current_category = "Gaming"
         entry = _entry("C:/Games/game.exe")
-        ui.last_deleted = ("Gaming", 0, entry)
+        ui.undo_stack = [("Gaming", 0, entry)]
         ui.trash = [("Gaming", entry)]
         c.remove_app_from_category("Gaming", 0)
 
@@ -102,7 +102,7 @@ class TestUndoTrashSync:
 
         assert any(e["path"] == "C:/Games/game.exe" for e in c.categories["Gaming"])
         assert ui.trash == []
-        assert ui.last_deleted is None
+        assert ui.undo_stack == []
 
     def test_trash_restore_after_undo_does_not_duplicate(self, tmp_path):
         c = _make_config(tmp_path)
@@ -113,7 +113,7 @@ class TestUndoTrashSync:
         ui = _make_ui(c)
         ui.current_category = "Gaming"
         entry = _entry("C:/Games/game.exe")
-        ui.last_deleted = ("Gaming", 0, entry)
+        ui.undo_stack = [("Gaming", 0, entry)]
         ui.trash = [("Gaming", entry)]
 
         ui.undo_delete()
@@ -144,7 +144,7 @@ class TestUndoTrashSync:
         ui = _make_ui(c)
         ui.current_category = "Gaming"
         entry = _entry("C:/Games/game.exe")
-        ui.last_deleted = ("Gaming", 0, entry)
+        ui.undo_stack = [("Gaming", 0, entry)]
         ui.trash = [("Gaming", entry)]
 
         tree = MagicMock()
@@ -159,21 +159,22 @@ class TestUndoTrashSync:
 
         # Calling undo_delete() afterward (e.g. a stray click before the
         # button visually updates) must be a safe no-op, not a duplicate
-        # insert — and last_deleted should already be cleared by the
-        # restore itself (see TestUndoButtonClearedByTrashRestore below).
+        # insert — and the undo stack should already be cleared of this
+        # item by the restore itself (see TestUndoButtonClearedByTrashRestore
+        # below).
         ui.undo_delete()
 
         matching = [e for e in c.categories["Gaming"] if e["path"] == "C:/Games/game.exe"]
         assert len(matching) == 1
-        assert ui.last_deleted is None
+        assert ui.undo_stack == []
 
 
 class TestUndoButtonClearedByTrashRestore:
     """Restoring an item from the Trash window used to leave the Undo
-    button showing (last_deleted was never cleared), so it stayed visible
-    and seemingly actionable until clicked, even though the item was
-    already back. restore_from_trash() should clear the pending undo entry
-    itself when it matches what was just restored."""
+    button showing (the pending undo entry was never cleared), so it stayed
+    visible and seemingly actionable until clicked, even though the item
+    was already back. restore_from_trash() should drop the matching entry
+    from the undo stack when it matches what was just restored."""
 
     def test_last_deleted_cleared_when_restored_item_matches(self, tmp_path):
         c = _make_config(tmp_path)
@@ -184,7 +185,7 @@ class TestUndoButtonClearedByTrashRestore:
         ui = _make_ui(c)
         ui.current_category = "Gaming"
         entry = _entry("C:/Games/game.exe")
-        ui.last_deleted = ("Gaming", 0, entry)
+        ui.undo_stack = [("Gaming", 0, entry)]
         ui.trash = [("Gaming", entry)]
 
         tree = MagicMock()
@@ -195,7 +196,7 @@ class TestUndoButtonClearedByTrashRestore:
         ui.dialogs.ask_yes_no.return_value = True
         ui.restore_from_trash(tree)
 
-        assert ui.last_deleted is None
+        assert ui.undo_stack == []
         ui.undo_button.pack_forget.assert_called_once()
 
     def test_last_deleted_untouched_when_restored_item_is_unrelated(self, tmp_path):
@@ -209,7 +210,7 @@ class TestUndoButtonClearedByTrashRestore:
         ui = _make_ui(c)
         ui.current_category = "Gaming"
         other_entry = _entry("C:/Games/other.exe")
-        ui.last_deleted = ("Gaming", 0, other_entry)
+        ui.undo_stack = [("Gaming", 0, other_entry)]
         ui.trash = [
             ("Gaming", other_entry),
             ("Gaming", _entry("C:/Games/unrelated.exe")),
@@ -223,7 +224,7 @@ class TestUndoButtonClearedByTrashRestore:
         ui.dialogs.ask_yes_no.return_value = True
         ui.restore_from_trash(tree)
 
-        assert ui.last_deleted == ("Gaming", 0, other_entry)
+        assert ui.undo_stack == [("Gaming", 0, other_entry)]
         ui.undo_button.pack_forget.assert_not_called()
 
 
@@ -494,3 +495,211 @@ class TestRunSelected:
         apps = c.categories["Gaming"]
         ui.launcher.launch_list.assert_called_once_with([apps[0]])
         ui.set_status.assert_called_once_with("Launched: a.exe")
+
+
+class TestMultiLevelUndo:
+    """undo_stack replaced a single last_deleted slot, which discarded the
+    ability to undo an earlier removal as soon as a second one happened.
+    These cover what's actually new: repeated undo walking back through
+    several removals in order, the button's depth label, and that
+    restoring one still-pending item via Trash only drops that one entry
+    from the stack."""
+
+    def test_undo_delete_restores_multiple_removals_in_reverse_order(self, tmp_path):
+        c = _make_config(tmp_path)
+        c.add_category("Gaming")
+        c.add_app_to_category("Gaming", "C:/Games/a.exe")
+        c.add_app_to_category("Gaming", "C:/Games/b.exe")
+        c.add_app_to_category("Gaming", "C:/Games/c.exe")
+
+        ui = _make_ui(c)
+        ui.current_category = "Gaming"
+
+        entry_a = _entry("C:/Games/a.exe")
+        entry_b = _entry("C:/Games/b.exe")
+        entry_c = _entry("C:/Games/c.exe")
+
+        # Mirrors what three consecutive remove_app() clicks would do:
+        # remove b (index 1) -> [a, c]; remove what's now index 1, c -> [a];
+        # remove index 0, a -> []. Each index is recorded at the moment of
+        # that specific removal, same as remove_app() does.
+        c.remove_app_from_category("Gaming", 1)
+        ui.undo_stack.append(("Gaming", 1, entry_b))
+        c.remove_app_from_category("Gaming", 1)
+        ui.undo_stack.append(("Gaming", 1, entry_c))
+        c.remove_app_from_category("Gaming", 0)
+        ui.undo_stack.append(("Gaming", 0, entry_a))
+
+        assert len(ui.undo_stack) == 3
+
+        ui.undo_delete()  # restores a (the most recent removal)
+        assert [e["path"] for e in c.categories["Gaming"]] == ["C:/Games/a.exe"]
+
+        ui.undo_delete()  # restores c
+        assert [e["path"] for e in c.categories["Gaming"]] == ["C:/Games/a.exe", "C:/Games/c.exe"]
+
+        ui.undo_delete()  # restores b — fully back to the original order
+        assert [e["path"] for e in c.categories["Gaming"]] == [
+            "C:/Games/a.exe", "C:/Games/b.exe", "C:/Games/c.exe",
+        ]
+        assert ui.undo_stack == []
+
+    def test_undo_button_label_shows_stack_depth(self, tmp_path):
+        c = _make_config(tmp_path)
+        ui = _make_ui(c)
+
+        ui.undo_stack.append(("Gaming", 0, _entry("C:/a.exe")))
+        ui._refresh_undo_button()
+        ui.undo_button.configure.assert_called_with(text="↺ Undo")
+
+        ui.undo_stack.append(("Gaming", 0, _entry("C:/b.exe")))
+        ui._refresh_undo_button()
+        ui.undo_button.configure.assert_called_with(text="↺ Undo (2)")
+
+        ui.undo_stack.pop()
+        ui._refresh_undo_button()
+        ui.undo_button.configure.assert_called_with(text="↺ Undo")
+
+    def test_restore_from_trash_removes_only_matching_entry_from_stack(self, tmp_path):
+        """Two removals are both still pending in the undo stack; restoring
+        one of them via the Trash window must only drop that one entry,
+        leaving the other one's Undo still intact — a scenario that
+        couldn't exist under the old single-slot design."""
+        c = _make_config(tmp_path)
+        c.add_category("Gaming")
+        c.add_app_to_category("Gaming", "C:/a.exe")
+        c.add_app_to_category("Gaming", "C:/b.exe")
+        c.remove_app_from_category("Gaming", 1)
+        c.remove_app_from_category("Gaming", 0)
+
+        ui = _make_ui(c)
+        ui.current_category = "Gaming"
+        entry_a = _entry("C:/a.exe")
+        entry_b = _entry("C:/b.exe")
+        ui.undo_stack = [("Gaming", 1, entry_b), ("Gaming", 0, entry_a)]
+        ui.trash = [("Gaming", entry_b), ("Gaming", entry_a)]
+
+        tree = MagicMock()
+        tree.selection.return_value = ["row_b"]
+        tree.item.return_value = ("Gaming", "b.exe", "C:/b.exe")
+        ui.dialogs.ask_yes_no.return_value = True
+
+        ui.restore_from_trash(tree)
+
+        assert ui.undo_stack == [("Gaming", 0, entry_a)]
+
+
+class TestConfirmBeforeBulkLaunch:
+    """run_apps()/run_profile() previously launched immediately regardless
+    of size — one mis-click could silently open a dozen windows. Above
+    CONFIRM_LAUNCH_THRESHOLD apps, both now confirm first via
+    dialogs.ask_yes_no(); below it, they stay one-click as before."""
+
+    def _fill_category(self, c, count):
+        c.add_category("Gaming")
+        for i in range(count):
+            c.add_app_to_category("Gaming", f"C:/Games/app{i}.exe")
+        return c.categories["Gaming"]
+
+    # -- run_apps() --
+
+    def test_run_apps_below_threshold_launches_without_confirming(self, tmp_path):
+        c = _make_config(tmp_path)
+        apps = self._fill_category(c, CONFIRM_LAUNCH_THRESHOLD - 1)
+
+        ui = _make_ui(c)
+        ui.current_category = "Gaming"
+        ui.launcher = MagicMock()
+
+        ui.run_apps()
+
+        ui.dialogs.ask_yes_no.assert_not_called()
+        ui.launcher.launch_list.assert_called_once_with(apps)
+        ui.set_status.assert_called_once_with(f"Launched {len(apps)} app(s) from 'Gaming'")
+
+    def test_run_apps_at_threshold_confirmed_launches(self, tmp_path):
+        c = _make_config(tmp_path)
+        apps = self._fill_category(c, CONFIRM_LAUNCH_THRESHOLD)
+
+        ui = _make_ui(c)
+        ui.current_category = "Gaming"
+        ui.launcher = MagicMock()
+        ui.dialogs.ask_yes_no.return_value = True
+
+        ui.run_apps()
+
+        ui.dialogs.ask_yes_no.assert_called_once_with(
+            ui, "Confirm Launch", f"Launch {len(apps)} apps in 'Gaming'?"
+        )
+        ui.launcher.launch_list.assert_called_once_with(apps)
+        ui.set_status.assert_called_once_with(f"Launched {len(apps)} app(s) from 'Gaming'")
+
+    def test_run_apps_at_threshold_declined_does_not_launch(self, tmp_path):
+        c = _make_config(tmp_path)
+        apps = self._fill_category(c, CONFIRM_LAUNCH_THRESHOLD)
+
+        ui = _make_ui(c)
+        ui.current_category = "Gaming"
+        ui.launcher = MagicMock()
+        ui.dialogs.ask_yes_no.return_value = False
+
+        ui.run_apps()
+
+        ui.dialogs.ask_yes_no.assert_called_once_with(
+            ui, "Confirm Launch", f"Launch {len(apps)} apps in 'Gaming'?"
+        )
+        ui.launcher.launch_list.assert_not_called()
+        ui.set_status.assert_not_called()
+
+    # -- run_profile() --
+
+    def test_run_profile_below_threshold_launches_without_confirming(self, tmp_path):
+        c = _make_config(tmp_path)
+        apps = self._fill_category(c, CONFIRM_LAUNCH_THRESHOLD - 1)
+        c.add_profile("Evening", ["Gaming"])
+
+        ui = _make_ui(c)
+        ui.profile_var = FakeVar("Evening")
+        ui.launcher = MagicMock()
+
+        ui.run_profile()
+
+        ui.dialogs.ask_yes_no.assert_not_called()
+        ui.launcher.launch_list.assert_called_once_with(apps)
+        ui.set_status.assert_called_once_with(f"Launched profile 'Evening' ({len(apps)} app(s))")
+
+    def test_run_profile_at_threshold_confirmed_launches(self, tmp_path):
+        c = _make_config(tmp_path)
+        apps = self._fill_category(c, CONFIRM_LAUNCH_THRESHOLD)
+        c.add_profile("Evening", ["Gaming"])
+
+        ui = _make_ui(c)
+        ui.profile_var = FakeVar("Evening")
+        ui.launcher = MagicMock()
+        ui.dialogs.ask_yes_no.return_value = True
+
+        ui.run_profile()
+
+        ui.dialogs.ask_yes_no.assert_called_once_with(
+            ui, "Confirm Launch", f"Launch {len(apps)} apps in profile 'Evening'?"
+        )
+        ui.launcher.launch_list.assert_called_once_with(apps)
+        ui.set_status.assert_called_once_with(f"Launched profile 'Evening' ({len(apps)} app(s))")
+
+    def test_run_profile_at_threshold_declined_does_not_launch(self, tmp_path):
+        c = _make_config(tmp_path)
+        apps = self._fill_category(c, CONFIRM_LAUNCH_THRESHOLD)
+        c.add_profile("Evening", ["Gaming"])
+
+        ui = _make_ui(c)
+        ui.profile_var = FakeVar("Evening")
+        ui.launcher = MagicMock()
+        ui.dialogs.ask_yes_no.return_value = False
+
+        ui.run_profile()
+
+        ui.dialogs.ask_yes_no.assert_called_once_with(
+            ui, "Confirm Launch", f"Launch {len(apps)} apps in profile 'Evening'?"
+        )
+        ui.launcher.launch_list.assert_not_called()
+        ui.set_status.assert_not_called()
