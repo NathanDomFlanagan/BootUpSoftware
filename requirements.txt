@@ -1,8 +1,12 @@
-customtkinter
-keyboard
-pystray
-pillow
-pywin32
+customtkinter>=5.2.2,<6
+keyboard>=0.13.5,<0.14
+pystray>=0.19.5,<0.20
+pillow>=12.1,<13
+
+# pywin32 versions by sequential build number (306, 307 ... 312), not
+# semver, so there's no major-version boundary to cap at — floor only.
+pywin32>=306
 
 # Dev/testing only — not needed to run the app itself
-pytest
+pytest>=8,<10
+pyinstaller>=6.16,<7

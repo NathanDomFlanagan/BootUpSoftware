@@ -176,7 +176,7 @@ class TestUndoButtonClearedByTrashRestore:
     was already back. restore_from_trash() should drop the matching entry
     from the undo stack when it matches what was just restored."""
 
-    def test_last_deleted_cleared_when_restored_item_matches(self, tmp_path):
+    def test_undo_stack_cleared_when_restored_item_matches(self, tmp_path):
         c = _make_config(tmp_path)
         c.add_category("Gaming")
         c.add_app_to_category("Gaming", "C:/Games/game.exe")
@@ -199,7 +199,7 @@ class TestUndoButtonClearedByTrashRestore:
         assert ui.undo_stack == []
         ui.undo_button.pack_forget.assert_called_once()
 
-    def test_last_deleted_untouched_when_restored_item_is_unrelated(self, tmp_path):
+    def test_undo_stack_untouched_when_restored_item_is_unrelated(self, tmp_path):
         """Restoring some other trashed item shouldn't clear a still-valid
         pending undo for a different app."""
         c = _make_config(tmp_path)

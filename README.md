@@ -17,7 +17,7 @@ To run from source instead, see [Requirements](#requirements) and [Running it](#
 - **Add apps from three sources** — a searchable, refreshable scan of Start Menu + Desktop shortcuts, installed UWP/Microsoft Store apps, or browse for any `.exe`/`.lnk` file manually
 - **Edit App** — change an app's display name, launch arguments, and working directory after adding it (e.g. turning a browser shortcut into a specific web-app launch with `--app=...`)
 - **Rename / delete categories and profiles**
-- **Undo** — restore the last app you removed from a category
+- **Undo** — restore apps you've removed from a category, most recent first; click it repeatedly to walk back through several removals (the button shows a count when more than one is pending)
 - **Trash view** — see everything you've removed this session and restore any of them
 - **Hover tooltips** — hover over an app in the list to see its full file path
 - **System tray** — closing the window minimizes to the tray instead of quitting; the tray icon adapts to your Windows light/dark taskbar theme
@@ -49,7 +49,7 @@ python main.py
 
 Pass `--startup` to launch minimized straight to the tray (this is what the Run at Startup registry entry uses automatically — you shouldn't need to pass it by hand).
 
-On first run, if no `config.json` exists next to the script, one is created automatically with a single empty `Default` category.
+On first run, if no `config.json` exists next to the script, one is created automatically with a single empty category named `default` (lowercase). Renaming or deleting the default category is blocked, and that check is case-insensitive — re-casing it to `Default` doesn't get around the protection.
 
 ## Project structure
 
@@ -122,13 +122,13 @@ If you have an older `config.json` from a previous version (the original flat fo
 **Categories:**
 1. Click **New** next to the Category dropdown, name it
 2. Select it, click **Add App** — pick from the searchable list (Start Menu/Desktop shortcuts and installed UWP/Store apps) or use **Browse Manually...** for anything not listed
-3. Click **Run All** to launch everything in that category, or select one app and click **Run Selected**
+3. Click **Run All** to launch everything in that category, or select one or more apps (Ctrl-click / Shift-click for several) and click **Run Selected**. Launching 5 or more apps at once asks for confirmation first, so a stray click doesn't open your whole category
 4. Select an app and click **Edit App** (or double-click it) to rename it, or set launch arguments/a working directory — useful for e.g. turning a browser shortcut into a specific web-app launch
 
 **Profiles:**
 1. Click **New** next to the Profile dropdown, name it — this opens the category picker automatically
 2. Check the categories you want included, click **Save**
-3. Select the profile and click **Run Profile** to launch every app across all its categories at once
+3. Select the profile and click **Run Profile** to launch every app across all its categories at once (again, 5 or more apps prompts for confirmation first)
 
 Use **Edit** on an existing profile any time to change which categories it includes.
 
@@ -139,8 +139,16 @@ Open **Settings...** from the menu bar for:
 - **General tab** — toggle **Dark Mode** for the whole app's appearance (applies immediately, remembered next time you open it); change the global shortcut that brings the window back from the tray; toggle **Run at Startup** (adds/removes a `HKCU\...\CurrentVersion\Run` registry entry, no admin rights needed); toggle **Start Minimized** for whether startup launches should skip straight to the tray; pick a **Startup Profile** to auto-launch its apps when the app starts at login (not on a manual open). If the startup entry goes stale — e.g. you moved or re-cloned the project folder — a **Repair Startup Entry** button appears automatically.
 - **Backup tab** — export your categories/profiles to a JSON file, or import one (with merge/replace/skip choices per category on conflict).
 
+## How undo and trash work
+
+Removing an app records it in two places, both of which live only for the current session:
+
+- **Undo** is a stack of removals. Each **Remove App** pushes onto it, and each click of **Undo** pops the most recent one back — last removed, first restored. It re-inserts the app at the position it originally held in the category, and the button disappears again once the stack is empty.
+- **Trash** is a flat list of everything removed this session, in removal order. The Trash window lets you restore any of them in any order, not just the most recent. A restore from Trash **appends** the app to the end of its category rather than putting it back at its old position.
+
+The two stay in sync: restoring an app from Trash also drops it from the undo stack, so a later **Undo** targets the next genuinely-removed app instead of re-adding a duplicate.
+
 ## Notes / known limitations
 
 - The Trash/Undo history is **in-memory only** — it resets when you close the app. Removed apps are gone from `config.json` immediately (that part is permanent across restarts), but the *undo/trash UI* for viewing what was removed only lasts for the current session.
 - Category names are **case-insensitive** for uniqueness — `"Gaming"` and `"gaming"` can't both exist as separate categories (the typed casing is preserved, just not duplicated).
-- Only one level of undo is kept — removing a second app before undoing the first discards the ability to undo the first one.

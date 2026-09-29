@@ -10,20 +10,21 @@ correctly either way — just things that could be nicer.
       (`ui.py`) — both now use the same mapping: `New = green`,
       `Rename/Edit = blue`, `Delete = red`.
 - [x] "Add App" picker showed only the app name, with no path column or
-      tooltip (`ui.py`, `_open_app_picker`) — two Start Menu shortcuts with
+      tooltip (the picker, since split out of `ui.py` into `app_picker.py`
+      as `AppPickerWindow`) — two Start Menu shortcuts with
       the same display name (e.g. two installed versions, or the same app
       listed in two Start Menu folders) were indistinguishable. Now shows a
       Path column plus a hover tooltip, matching the main app list.
 - [x] `edit_profile`'s category checklist had no scrollbar (`ui.py`) — fixed
       `300x400` window; with enough categories, the list ran past the bottom
       with no way to reach the rest except manually dragging the window
-      taller. Now wrapped in a `Canvas` + `Scrollbar`, scrollable by
-      scrollbar or mouse wheel, and the inner frame resizes to match the
-      window width if it's dragged wider.
+      taller. Now lives in `edit_profile_dialog.py` inside a
+      `CTkScrollableFrame`, scrollable by scrollbar or mouse wheel, and the
+      inner frame resizes to match the window width if it's dragged wider.
 - [x] Undo button was always visible, usually disabled (`ui.py`, status bar)
       — it sat in the status bar taking up space even when there was
       nothing to undo. Now hidden entirely (`pack_forget()`) until
-      `last_deleted` is set, and re-appears pinned to the far right via
+      `undo_stack` is non-empty, and re-appears pinned to the far right via
       `_refresh_undo_button()`.
 
 ## Open
